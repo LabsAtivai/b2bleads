@@ -27,7 +27,7 @@
       </div>
 
       <div class="toolbar">
-        <button class="btn-outline">
+        <button class="btn-outline" @click="exportCsv">
           <span class="i">⬇️</span> Exportar
         </button>
         <button class="btn-outline">
@@ -53,7 +53,7 @@
 
           <label class="mt-4 block text-sm font-medium text-slate-700">Localização</label>
           <div class="mt-2 flex gap-2">
-            <input v-model="filters.localizacao" type="text" class="input" placeholder="Cidade, UF ou CEP" />
+            <input v-model="filters.localizacao" type="text" class="input" placeholder="Cidade, UF, CEP ou cód. IBGE" />
             <button class="btn-outline" title="Abrir seletor">⋯</button>
           </div>
         </section>
@@ -75,8 +75,8 @@
               <label class="block text-sm font-medium text-slate-700">Tipo</label>
               <select v-model="filters.tipo" class="select mt-2">
                 <option value="">Todos</option>
-                <option value="MATRIZ">Matriz</option>
-                <option value="FILIAL">Filial</option>
+                <option value="Matriz">Matriz</option>
+                <option value="Filial">Filial</option>
               </select>
             </div>
 
@@ -84,9 +84,11 @@
               <label class="block text-sm font-medium text-slate-700">Natureza jurídica</label>
               <select v-model="filters.naturezaJuridica" class="select mt-2">
                 <option value="">Todas</option>
-                <option value="LTDA">LTDA</option>
-                <option value="SA">S/A</option>
-                <option value="EI">Empresário Individual</option>
+                <!-- Exemplos comuns (códigos oficiais RF) -->
+                <option value="2062">Sociedade Empresária Limitada (LTDA)</option>
+                <option value="2038">Sociedade Anônima (S/A)</option>
+                <option value="2135">Empresário (Individual)</option>
+                <option value="2143">EIRELI (antiga)</option>
               </select>
             </div>
 
@@ -103,15 +105,15 @@
 
             <div>
               <label class="block text-sm font-medium text-slate-700">Capital social</label>
-              <input v-model="filters.capitalSocial" type="text" class="input mt-2" placeholder="Ex.: ≥ 100.000" />
+              <input v-model="filters.capitalSocial" type="text" class="input mt-2" placeholder="Ex.: >=100000 ou 10000-50000" />
             </div>
 
             <div>
               <label class="block text-sm font-medium text-slate-700">Opção pelo MEI</label>
               <select v-model="filters.opcaoMei" class="select mt-2">
                 <option value="">Todas</option>
-                <option value="SIM">Sim</option>
-                <option value="NAO">Não</option>
+                <option value="S">Sim</option>
+                <option value="N">Não</option>
               </select>
             </div>
 
@@ -119,8 +121,8 @@
               <label class="block text-sm font-medium text-slate-700">Opção pelo Simples</label>
               <select v-model="filters.opcaoSimples" class="select mt-2">
                 <option value="">Todas</option>
-                <option value="SIM">Sim</option>
-                <option value="NAO">Não</option>
+                <option value="S">Sim</option>
+                <option value="N">Não</option>
               </select>
             </div>
 
@@ -168,18 +170,18 @@
         </div>
 
         <!-- Lista -->
-        <div v-for="item in results" :key="item.id" class="card p-4 sm:p-5">
+        <div v-for="item in results" :key="item.cnpj" class="card p-4 sm:p-5">
           <div class="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
             <div class="space-y-2">
               <span class="badge-success" v-if="item.status === 'ATIVA'">● Ativa</span>
               <span class="badge" v-else>● Inativa</span>
 
               <h3 class="text-lg font-semibold text-slate-900">
-                {{ item.codigo }} {{ item.nome }}
+                {{ item.codigo ?? '—' }} {{ item.nome }}
               </h3>
 
               <div class="flex flex-wrap items-center gap-3 text-sm text-slate-600">
-                <span>🗓️ {{ item.atualizadoEm }}</span>
+                <span>🗓️ {{ item.atualizado_em }}</span>
                 <span>📍 {{ item.localidade }}</span>
               </div>
             </div>
@@ -190,7 +192,7 @@
           </div>
         </div>
 
-        <!-- Paginação simples (exemplo) -->
+        <!-- Paginação simples -->
         <div class="flex items-center justify-between">
           <button class="btn-outline" :disabled="page === 1" @click="page--">Anterior</button>
           <span class="text-sm text-slate-600">Página {{ page }}</span>
@@ -203,6 +205,7 @@
 
 <script setup>
 import { ref, reactive, computed, watch, onBeforeUnmount } from 'vue'
+import { findAllEmpresas, toApiParams } from '@/services/empresas.service'
 
 // abas só pra UI
 const activeTab = ref('segmento')
@@ -210,9 +213,9 @@ const activeTab = ref('segmento')
 // ======= filtros =======
 const filters = reactive({
   cnaePrincipal: '',
-  buscarCnaeSecundario: true,
+  buscarCnaeSecundario: false,
   localizacao: '',
-  situacao: 'ATIVA',
+  situacao: 'ATIVA',      // o backend já assume ATIVA por padrão; mantenha se desejar
   tipo: '',
   naturezaJuridica: '',
   porte: '',
@@ -231,7 +234,7 @@ const results = ref([])
 const total = ref(0)
 const loading = ref(false)
 const error = ref('')
-let aborter /**: AbortController | undefined */ = undefined
+let aborter = undefined // AbortController
 
 // formato do total apenas pra exibir
 const formattedApprox = computed(() => Intl.NumberFormat('pt-BR').format(total.value))
@@ -246,54 +249,29 @@ function debounce(fn, ms = 400) {
   }
 }
 
-// monta query com filtros + paginação
-function buildQuery() {
-  const q = new URLSearchParams()
-
-  // só envia filtros com valor
-  Object.entries({
-    cnaePrincipal: filters.cnaePrincipal,
-    buscarCnaeSecundario: filters.buscarCnaeSecundario ? '1' : '',
-    localizacao: filters.localizacao,
-    situacao: filters.situacao,
-    tipo: filters.tipo,
-    naturezaJuridica: filters.naturezaJuridica,
-    porte: filters.porte,
-    capitalSocial: filters.capitalSocial,
-    opcaoMei: filters.opcaoMei,
-    opcaoSimples: filters.opcaoSimples,
-    tributacao: filters.tributacao,
-  }).forEach(([k, v]) => {
-    if (v !== '' && v != null) q.set(k, String(v))
-  })
-
-  q.set('page', String(page.value))
-  q.set('pageSize', String(pageSize))
-  return q
-}
-
-// chamada de API (troque a URL pela sua)
+// monta params e chama o service
 async function fetchCompaniesImmediate() {
   error.value = ''
   loading.value = true
 
-  // cancela requisição anterior se ainda estiver em voo
-  if (aborter) aborter.abort()
+  // cancela requisição anterior se ainda estiver em voo (só útil se usar fetch; axios cancela com token)
+  if (aborter) aborter.abort?.()
   aborter = new AbortController()
 
   try {
-    // EXEMPLO com fetch — adapte para axios se preferir
-    const url = `/api/empresas?${buildQuery().toString()}`
-    const res = await fetch(url, { signal: aborter.signal })
+    const params = toApiParams({
+      ...filters,
+      page: page.value,
+      pageSize,
+      fields: 'cnpj,nome,localidade,codigo,status,atualizado_em', // campos da view compacta
+      detalhe: '0', // lista rápida
+    })
 
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    // formato esperado: { items: [...], total: number }
-    const data = await res.json()
-
-    results.value = data.items ?? []
-    total.value = Number.isFinite(data.total) ? data.total : results.value.length
+    const { items, total: tt } = await findAllEmpresas(params)
+    results.value = items ?? []
+    total.value = Number.isFinite(tt) ? tt : results.value.length
   } catch (e) {
-    if (e?.name === 'AbortError') return // foi cancelado, ignora
+    if (e?.name === 'AbortError') return
     error.value = e?.message ?? 'Erro ao buscar dados'
     results.value = []
   } finally {
@@ -307,7 +285,6 @@ const fetchCompanies = debounce(fetchCompaniesImmediate, 400)
 // 🔁 Reagir a mudanças dos filtros e da página
 watch(
   () => ({
-    // observar cada campo garante reatividade profunda sem custo grande
     cnaePrincipal: filters.cnaePrincipal,
     buscarCnaeSecundario: filters.buscarCnaeSecundario,
     localizacao: filters.localizacao,
@@ -322,7 +299,7 @@ watch(
     page: page.value,
   }),
   (cur, prev) => {
-    // se filtro mudou (não apenas página), reseta para a página 1
+    // se filtros (exceto page) mudarem, volte pra 1
     if (prev && cur && cur.page === prev.page) page.value = 1
     fetchCompanies()
   },
@@ -346,14 +323,18 @@ function clearFilters() {
   })
 }
 
+function onSearch() {
+  fetchCompaniesImmediate()
+}
+
 function verEmpresa(item) {
-  // navegue para a rota ou abra modal
-  alert(`Ver empresa: ${item.nome}`)
+  // aqui você pode navegar para a rota /empresa/:cnpj ou abrir um modal
+  alert(`Ver empresa: ${item.nome} (CNPJ: ${item.cnpj})`)
 }
 
 function exportCsv() {
-  const header = ['codigo', 'nome', 'status', 'atualizadoEm', 'localidade']
-  const lines = results.value.map(r => [r.codigo, r.nome, r.status, r.atualizadoEm, r.localidade])
+  const header = ['codigo', 'nome', 'status', 'atualizado_em', 'localidade']
+  const lines = results.value.map(r => [r.codigo ?? '', r.nome ?? '', r.status ?? '', r.atualizado_em ?? '', r.localidade ?? ''])
   const csv = [header, ...lines].map(arr => arr.join(';')).join('\n')
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
   const url = URL.createObjectURL(blob)
@@ -365,6 +346,6 @@ function exportCsv() {
 }
 
 onBeforeUnmount(() => {
-  if (aborter) aborter.abort()
+  if (aborter) aborter.abort?.()
 })
 </script>
