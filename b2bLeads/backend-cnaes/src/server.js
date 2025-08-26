@@ -107,15 +107,15 @@ app.get('/api/empresas', async (req, res) => {
   const params = []
 
   // situação: melhor usar situacao_codigo quando possível ('2' = ATIVA)
-  if (p.situacao) {
-    if (p.situacao === 'ATIVA') {
-      where.push('situacao_codigo = ?'); params.push('2')
-    } else if (p.situacao === 'INATIVA') {
-      where.push('situacao_codigo <> ?'); params.push('2')
-    } else {
-      where.push('situacao = ?'); params.push(p.situacao)
-    }
-  }
+  // if (p.situacao) {
+  //   if (p.situacao === 'ATIVA') {
+  //     where.push('situacao_codigo = ?'); params.push('2')
+  //   } else if (p.situacao === 'INATIVA') {
+  //     where.push('situacao_codigo <> ?'); params.push('2')
+  //   } else {
+  //     where.push('situacao = ?'); params.push(p.situacao)
+  //   }
+  // }
 
   if (p.tipo) {
     // na view compacta só temos 'status', 'situacao_codigo', não 'matriz_filial'
