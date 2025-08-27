@@ -4,15 +4,15 @@
   "type": "module",
   "version": "1.0.0",
   "scripts": {
-    "dev": "nodemon --inspect src/server.js",
+    "dev": "node --watch src/server.js",
     "start": "node src/server.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
+    "json2csv": "^6.0.0-alpha.2",
     "mysql2": "^3.11.0",
-    "nodemon": "^3.1.10",
     "zod": "^3.23.8"
   }
 }

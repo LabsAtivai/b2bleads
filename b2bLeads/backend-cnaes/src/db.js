@@ -9,6 +9,6 @@ export const pool = createPool({
   database: process.env.DB_NAME,
   waitForConnections: true,
   connectionLimit: 10,
-  connectTimeout: 30000,   // 15s
+  connectTimeout: 900000,   // 15s
   enableKeepAlive: true
 })
