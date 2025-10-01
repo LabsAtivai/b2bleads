@@ -1,246 +1,270 @@
+<!-- src/components/SearchCompanies.vue -->
 <template>
-  <div class="mx-auto max-w-7xl px-4 py-6 lg:py-10">
-    <!-- Header com Abas e Ações -->
-    <div class="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-      <div class="flex flex-wrap items-center gap-2">
-        <button
-          class="btn-ghost"
-          :class="activeTab === 'segmento' ? 'ring-2 ring-indigo-500 bg-indigo-50 text-indigo-700' : ''"
-          @click="activeTab = 'segmento'"
-        >
-          Segmento
-        </button>
-        <button
-          class="btn-ghost"
-          :class="activeTab === 'cnpj' ? 'ring-2 ring-indigo-500 bg-indigo-50 text-indigo-700' : ''"
-          @click="activeTab = 'cnpj'"
-        >
-          CNPJ
-        </button>
-        <button
-          class="btn-ghost"
-          :class="activeTab === 'campo' ? 'ring-2 ring-indigo-500 bg-indigo-50 text-indigo-700' : ''"
-          @click="activeTab = 'campo'"
-        >
-          Campo
-        </button>
+  <div class="space-y-6">
+    <!-- Filtros -->
+    <div class="card p-4">
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <!-- CNAE principal (com autocomplete) -->
+        <div>
+          <label class="block text-sm font-medium text-slate-700">CNAE principal</label>
+          <Typeahead
+            v-model="form.cnaePrincipal"
+            placeholder="ex: 6201501 ou digite para buscar"
+            :minChars="2"
+            :fetcher="suggestCnae"
+            :clearOnSelect="false"
+            class="mt-1"
+          />
+          <label class="inline-flex items-center gap-2 mt-2 text-sm">
+            <input type="checkbox" v-model="form.buscarCnaeSecundario" class="checkbox" />
+            Buscar também em CNAEs secundários
+          </label>
+        </div>
+
+        <!-- Localização (UF / Cidade / CEP / IBGE) -->
+        <div>
+          <label class="block text-sm font-medium text-slate-700">Localização</label>
+          <div class="flex gap-2 mt-1">
+            <Typeahead
+              v-model="quickUf"
+              placeholder="UF (ex: SP)"
+              :minChars="1"
+              :fetcher="suggestUf"
+              class="flex-1"
+            />
+            <button class="btn btn-outline" @click="aplicarUf()" :disabled="!quickUf">Aplicar</button>
+          </div>
+          <Typeahead
+            v-model="form.localizacao"
+            placeholder="Cidade (ex: Sao Paulo)"
+            :minChars="2"
+            :fetcher="fetchCidade"
+            class="mt-2"
+          />
+          <p class="text-xs text-slate-500 mt-1">
+            Você também pode digitar CEP (8 dígitos) ou código IBGE (7) diretamente.
+          </p>
+        </div>
+
+        <!-- Situação -->
+        <div>
+          <label class="block text-sm font-medium text-slate-700">Situação</label>
+          <select v-model="form.situacao" class="select mt-1">
+            <option value="">(Padrão: ATIVA)</option>
+            <option value="ATIVA">ATIVA</option>
+            <option value="INATIVA">INATIVA</option>
+            <option value="NULA">NULA</option>
+            <option value="SUSPENSA">SUSPENSA</option>
+            <option value="INAPTA">INAPTA</option>
+            <option value="BAIXADA">BAIXADA</option>
+          </select>
+        </div>
+
+        <!-- Modo detalhe -->
+        <div>
+          <label class="block text-sm font-medium text-slate-700">Detalhe</label>
+          <select v-model="form.detalhe" class="select mt-1">
+            <option :value="false">Compacto</option>
+            <option :value="true">Completo</option>
+          </select>
+          <p class="text-xs text-slate-500 mt-2">
+            Completo habilita filtros/colunas extras (porte, natureza, sócios, etc).
+          </p>
+        </div>
+
+        <!-- Porte (somente detalhe=1) -->
+        <div v-if="form.detalhe">
+          <label class="block text-sm font-medium text-slate-700">Porte</label>
+          <Typeahead
+            v-model="form.porte"
+            placeholder="Digite para filtrar portes"
+            :minChars="0"
+            :fetcher="suggestPorte"
+            class="mt-1"
+          />
+        </div>
+
+        <!-- Tipo (matriz/filial) (somente detalhe=1) -->
+        <div v-if="form.detalhe">
+          <label class="block text-sm font-medium text-slate-700">Tipo</label>
+          <select v-model="form.tipo" class="select mt-1">
+            <option value="">Todos</option>
+            <option value="Matriz">Matriz</option>
+            <option value="Filial">Filial</option>
+          </select>
+        </div>
+
+        <!-- Natureza Jurídica (somente detalhe=1) -->
+        <div v-if="form.detalhe">
+          <label class="block text-sm font-medium text-slate-700">Natureza Jurídica</label>
+          <Typeahead
+            v-model="form.naturezaJuridica"
+            placeholder="Digite para buscar natureza"
+            :minChars="2"
+            :fetcher="suggestNatureza"
+            class="mt-1"
+          />
+        </div>
+
+        <!-- Simples/MEI (somente detalhe=1) -->
+        <div v-if="form.detalhe">
+          <label class="block text-sm font-medium text-slate-700">Simples</label>
+          <select v-model="form.opcaoSimples" class="select mt-1">
+            <option value="">Todos</option>
+            <option value="S">Sim</option>
+            <option value="N">Não</option>
+          </select>
+        </div>
+        <div v-if="form.detalhe">
+          <label class="block text-sm font-medium text-slate-700">MEI</label>
+          <select v-model="form.opcaoMei" class="select mt-1">
+            <option value="">Todos</option>
+            <option value="S">Sim</option>
+            <option value="N">Não</option>
+          </select>
+        </div>
+
+        <!-- Campos -->
+        <div class="sm:col-span-2 lg:col-span-2">
+          <label class="block text-sm font-medium text-slate-700">Campos</label>
+          <input
+            v-model="form.fields"
+            class="input mt-1"
+            :placeholder="form.detalhe ? 'Ex: cnpj,razao_social,nome_fantasia,localidade,cnae_principal,porte,atualizado_em' : 'Ex: cnpj,nome,localidade,codigo,status,atualizado_em'"
+          />
+          <p class="text-xs text-slate-500 mt-1">
+            Deixe em branco para usar os padrões do backend. Use os nomes do mapa de campos da view escolhida.
+          </p>
+        </div>
       </div>
 
-      <div class="toolbar">
-        <button class="btn-outline" @click="exportCsv">
-          <span class="i">⬇️</span> Exportar
+      <div class="mt-4 flex flex-wrap items-center gap-2">
+        <button class="btn btn-primary" @click="fetchNow" :disabled="loading">Buscar</button>
+        <button class="btn btn-ghost" @click="limpar()">Limpar</button>
+        <button class="btn btn-outline" @click="baixarCsv" :disabled="loading">
+          Exportar CSV (cnpj,nome,localidade,emails)
         </button>
-        <button class="btn-outline">
-          <span class="i">📄</span> Lista
-        </button>
+        <span class="text-sm text-slate-600" v-if="!loading">Total: <strong>{{ total }}</strong></span>
+        <span class="text-sm text-slate-500" v-else>Carregando…</span>
       </div>
     </div>
 
-    <div class="grid grid-cols-1 gap-6 lg:grid-cols-[360px,1fr]">
-      <!-- Sidebar: Filtros -->
-      <aside class="space-y-5">
-        <section class="card p-4 sm:p-5">
-          <label class="block text-sm font-medium text-slate-700">Ramo de atividade (CNAE)</label>
-          <div class="mt-2 flex gap-2">
-            <input v-model="filters.cnaePrincipal" type="text" class="input" placeholder="Ex.: 62.01-5/01" />
-            <button class="btn-outline" title="Abrir seletor">⋯</button>
-          </div>
-
-          <label class="mt-4 flex items-center gap-2">
-            <input v-model="filters.buscarCnaeSecundario" type="checkbox" class="checkbox" />
-            <span class="text-sm text-slate-700">Buscar CNAE secundário</span>
-          </label>
-
-          <label class="mt-4 block text-sm font-medium text-slate-700">Localização</label>
-          <div class="mt-2 flex gap-2">
-            <input v-model="filters.localizacao" type="text" class="input" placeholder="Cidade, UF, CEP ou cód. IBGE" />
-            <button class="btn-outline" title="Abrir seletor">⋯</button>
-          </div>
-        </section>
-
-        <section class="card p-4 sm:p-5">
-          <h2 class="mb-3 text-sm font-semibold text-slate-800">Características</h2>
-
-          <div class="grid grid-cols-1 gap-4">
-            <div>
-              <label class="block text-sm font-medium text-slate-700">Situação</label>
-              <select v-model="filters.situacao" class="select mt-2">
-                <option value="">Todas</option>
-                <option value="ATIVA">Ativa</option>
-                <option value="INATIVA">Inativa</option>
-              </select>
-            </div>
-
-            <div>
-              <label class="block text-sm font-medium text-slate-700">Tipo</label>
-              <select v-model="filters.tipo" class="select mt-2">
-                <option value="">Todos</option>
-                <option value="Matriz">Matriz</option>
-                <option value="Filial">Filial</option>
-              </select>
-            </div>
-
-            <div>
-              <label class="block text-sm font-medium text-slate-700">Natureza jurídica</label>
-              <select v-model="filters.naturezaJuridica" class="select mt-2">
-                <option value="">Todas</option>
-                <!-- Exemplos comuns (códigos oficiais RF) -->
-                <option value="2062">Sociedade Empresária Limitada (LTDA)</option>
-                <option value="2038">Sociedade Anônima (S/A)</option>
-                <option value="2135">Empresário (Individual)</option>
-                <option value="2143">EIRELI (antiga)</option>
-              </select>
-            </div>
-
-            <div>
-              <label class="block text-sm font-medium text-slate-700">Porte</label>
-              <select v-model="filters.porte" class="select mt-2">
-                <option value="">Todos</option>
-                <option value="MEI">MEI</option>
-                <option value="ME">ME</option>
-                <option value="EPP">EPP</option>
-                <option value="DEMAIS">Demais</option>
-              </select>
-            </div>
-
-            <div>
-              <label class="block text-sm font-medium text-slate-700">Capital social</label>
-              <input v-model="filters.capitalSocial" type="text" class="input mt-2" placeholder="Ex.: >=100000 ou 10000-50000" />
-            </div>
-
-            <div>
-              <label class="block text-sm font-medium text-slate-700">Opção pelo MEI</label>
-              <select v-model="filters.opcaoMei" class="select mt-2">
-                <option value="">Todas</option>
-                <option value="S">Sim</option>
-                <option value="N">Não</option>
-              </select>
-            </div>
-
-            <div>
-              <label class="block text-sm font-medium text-slate-700">Opção pelo Simples</label>
-              <select v-model="filters.opcaoSimples" class="select mt-2">
-                <option value="">Todas</option>
-                <option value="S">Sim</option>
-                <option value="N">Não</option>
-              </select>
-            </div>
-
-            <div>
-              <label class="block text-sm font-medium text-slate-700">Forma de tributação</label>
-              <select v-model="filters.tributacao" class="select mt-2">
-                <option value="">Todas</option>
-                <option value="SIMPLES">Simples</option>
-                <option value="LUCRO_PRESUMIDO">Lucro Presumido</option>
-                <option value="LUCRO_REAL">Lucro Real</option>
-              </select>
-            </div>
-          </div>
-
-          <div class="mt-5 flex items-center gap-2">
-            <button class="btn-primary" @click="onSearch">
-              Filtrar
-            </button>
-            <button class="btn-outline" @click="clearFilters">
-              Limpar filtros
+    <!-- Facetas simples (a partir dos itens da página) -->
+    <div class="card p-4">
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div>
+          <div class="text-sm font-medium text-slate-700 mb-1">UF (nos resultados)</div>
+          <div class="flex flex-wrap gap-2">
+            <button
+              v-for="uf in facetUf"
+              :key="uf"
+              class="btn btn-outline"
+              @click="aplicarFacetaUf(uf)"
+            >
+              {{ uf }}
             </button>
           </div>
-        </section>
-      </aside>
-
-      <!-- Resultados -->
-      <section class="space-y-4">
-        <div class="card p-4 sm:p-5">
-          <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <h1 class="text-xl font-semibold text-slate-900">Resultados da pesquisa</h1>
-              <p class="text-sm text-slate-600">
-                Aproximadamente {{ formattedApprox }} resultados ({{ loadHint }}).
-              </p>
-            </div>
-            <div class="toolbar">
-              <button class="btn-outline" @click="exportCsv">
-                ⬇️ Exportar CSV
-              </button>
-              <button class="btn-outline">
-                📄 Lista
-              </button>
-            </div>
+        </div>
+        <div class="sm:col-span-2">
+          <div class="text-sm font-medium text-slate-700 mb-1">Cidades (nos resultados)</div>
+          <div class="flex flex-wrap gap-2 max-h-28 overflow-auto pr-2">
+            <button
+              v-for="cid in facetCidade"
+              :key="cid"
+              class="btn btn-outline"
+              @click="aplicarFacetaCidade(cid)"
+            >
+              {{ cid }}
+            </button>
           </div>
         </div>
+      </div>
+    </div>
 
-        <!-- Lista -->
-        <div v-for="item in results" :key="item.cnpj" class="card p-4 sm:p-5">
-          <div class="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-            <div class="space-y-2">
-              <span class="badge-success" v-if="item.status === 'ATIVA'">● Ativa</span>
-              <span class="badge" v-else>● Inativa</span>
+    <!-- Tabela -->
+    <div class="card p-0 overflow-hidden">
+      <div class="overflow-x-auto">
+        <table class="min-w-full whitespace-nowrap">
+          <thead class="bg-slate-50 text-left text-sm text-slate-600">
+            <tr>
+              <th class="px-4 py-2">CNPJ</th>
+              <th class="px-4 py-2">Nome</th>
+              <th class="px-4 py-2">Localidade</th>
+              <th class="px-4 py-2">CNAE</th>
+              <th class="px-4 py-2">Status</th>
+              <th class="px-4 py-2">Atualizado</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-200 text-sm">
+            <tr v-for="it in rows" :key="it.cnpj" class="hover:bg-slate-50">
+              <td class="px-4 py-2 font-mono">{{ it.cnpj }}</td>
+              <td class="px-4 py-2">{{ it.nome || it.nome_fantasia || it.razao_social }}</td>
+              <td class="px-4 py-2">{{ it.localidade || (it.cidade && it.uf ? `${it.cidade} - ${it.uf}` : '') }}</td>
+              <td class="px-4 py-2">{{ it.codigo || it.cnae_principal }}</td>
+              <td class="px-4 py-2">{{ it.status || it.situacao }}</td>
+              <td class="px-4 py-2">{{ it.atualizado_em }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
 
-              <h3 class="text-lg font-semibold text-slate-900">
-                {{ item.codigo ?? '—' }} {{ item.nome }}
-              </h3>
-
-              <div class="flex flex-wrap items-center gap-3 text-sm text-slate-600">
-                <span>🗓️ {{ item.atualizado_em }}</span>
-                <span>📍 {{ item.localidade }}</span>
-              </div>
-            </div>
-
-            <div class="flex shrink-0 items-center gap-2">
-              <button class="btn-outline" @click="verEmpresa(item)">Ver empresa</button>
-            </div>
-          </div>
+      <!-- Paginação -->
+      <div class="flex items-center justify-between px-4 py-3">
+        <div class="text-sm text-slate-600">
+          Página {{ form.page }} de {{ totalPages }}
         </div>
-
-        <!-- Paginação simples -->
-        <div class="flex items-center justify-between">
-          <button class="btn-outline" :disabled="page === 1" @click="page--">Anterior</button>
-          <span class="text-sm text-slate-600">Página {{ page }}</span>
-          <button class="btn-outline" @click="page++">Próxima</button>
+        <div class="flex gap-2">
+          <button class="btn btn-outline" :disabled="form.page <= 1 || loading" @click="goPage(form.page - 1)">Anterior</button>
+          <button class="btn btn-outline" :disabled="form.page >= totalPages || loading" @click="goPage(form.page + 1)">Próxima</button>
         </div>
-      </section>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, computed, watch, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
+
+// serviços
 import { findAllEmpresas, toApiParams } from '@/services/empresas.service'
+import {
+  suggestCnae,
+  suggestUf,
+  suggestCidade,
+  suggestNatureza,
+  suggestPorte,
+} from '@/services/suggest.service'
 
-// abas só pra UI
-const activeTab = ref('segmento')
+// componente de autocomplete
+import Typeahead from '@/components/Typeahead.vue'
 
-// ======= filtros =======
-const filters = reactive({
+// ---------- estado ----------
+const rows = ref([])
+const total = ref(0)
+const loading = ref(false)
+
+// filtros do formulário
+const form = ref({
   cnaePrincipal: '',
   buscarCnaeSecundario: false,
   localizacao: '',
-  situacao: 'ATIVA',      // o backend já assume ATIVA por padrão; mantenha se desejar
+  situacao: '',       // backend pode assumir ATIVA quando vazio (se ativar na API)
   tipo: '',
   naturezaJuridica: '',
   porte: '',
   capitalSocial: '',
   opcaoMei: '',
   opcaoSimples: '',
-  tributacao: '',
+  detalhe: false,     // false = compacta; true = completa
+  fields: 'cnpj,nome,localidade,codigo,status,atualizado_em',
+  page: 1,
+  pageSize: 10,
 })
 
-// paginação
-const page = ref(1)
-const pageSize = 10
+// UF “rápida” (para preencher o campo de localização)
+const quickUf = ref('')
 
-// estados
-const results = ref([])
-const total = ref(0)
-const loading = ref(false)
-const error = ref('')
-let aborter = undefined // AbortController
-
-// formato do total apenas pra exibir
-const formattedApprox = computed(() => Intl.NumberFormat('pt-BR').format(total.value))
-const loadHint = computed(() => loading.value ? 'carregando…' : 'ok')
-
-// ===== util: debounce =====
+// ---------- helpers ----------
 function debounce(fn, ms = 400) {
   let t
   return (...args) => {
@@ -249,68 +273,42 @@ function debounce(fn, ms = 400) {
   }
 }
 
-// monta params e chama o service
-async function fetchCompaniesImmediate() {
-  error.value = ''
-  loading.value = true
+const totalPages = computed(() => Math.max(1, Math.ceil(total.value / form.value.pageSize)))
 
-  // cancela requisição anterior se ainda estiver em voo (só útil se usar fetch; axios cancela com token)
-  if (aborter) aborter.abort?.()
-  aborter = new AbortController()
+// Facetas simples com base na página atual
+const facetUf = computed(() => {
+  const s = new Set()
+  for (const r of rows.value) if (r.uf) s.add(r.uf)
+  return [...s].sort()
+})
+const facetCidade = computed(() => {
+  const s = new Set()
+  for (const r of rows.value) {
+    const c = r.cidade || (r.localidade ? String(r.localidade).split(' - ')[0] : '')
+    if (c) s.add(c)
+  }
+  return [...s].sort()
+})
 
-  try {
-    const params = toApiParams({
-      ...filters,
-      page: page.value,
-      pageSize,
-      fields: 'cnpj,nome,localidade,codigo,status,atualizado_em', // campos da view compacta
-      detalhe: '0', // lista rápida
-    })
-
-    const { items, total: tt } = await findAllEmpresas(params)
-    results.value = items ?? []
-    total.value = Number.isFinite(tt) ? tt : results.value.length
-  } catch (e) {
-    if (e?.name === 'AbortError') return
-    error.value = e?.message ?? 'Erro ao buscar dados'
-    results.value = []
-  } finally {
-    loading.value = false
+// aplicar facetas
+function aplicarFacetaUf(uf) {
+  form.value.localizacao = uf
+}
+function aplicarFacetaCidade(cid) {
+  form.value.localizacao = cid
+}
+function aplicarUf() {
+  if (quickUf.value) {
+    form.value.localizacao = quickUf.value
+    quickUf.value = ''
   }
 }
 
-// versão com debounce
-const fetchCompanies = debounce(fetchCompaniesImmediate, 400)
-
-// 🔁 Reagir a mudanças dos filtros e da página
-watch(
-  () => ({
-    cnaePrincipal: filters.cnaePrincipal,
-    buscarCnaeSecundario: filters.buscarCnaeSecundario,
-    localizacao: filters.localizacao,
-    situacao: filters.situacao,
-    tipo: filters.tipo,
-    naturezaJuridica: filters.naturezaJuridica,
-    porte: filters.porte,
-    capitalSocial: filters.capitalSocial,
-    opcaoMei: filters.opcaoMei,
-    opcaoSimples: filters.opcaoSimples,
-    tributacao: filters.tributacao,
-    page: page.value,
-  }),
-  (cur, prev) => {
-    // se filtros (exceto page) mudarem, volte pra 1
-    if (prev && cur && cur.page === prev.page) page.value = 1
-    fetchCompanies()
-  },
-  { immediate: true }
-)
-
-// ações auxiliares
-function clearFilters() {
-  Object.assign(filters, {
+// limpar filtros
+function limpar() {
+  form.value = {
     cnaePrincipal: '',
-    buscarCnaeSecundario: true,
+    buscarCnaeSecundario: false,
     localizacao: '',
     situacao: '',
     tipo: '',
@@ -319,33 +317,104 @@ function clearFilters() {
     capitalSocial: '',
     opcaoMei: '',
     opcaoSimples: '',
-    tributacao: '',
+    detalhe: false,
+    fields: 'cnpj,nome,localidade,codigo,status,atualizado_em',
+    page: 1,
+    pageSize: 10,
+  }
+}
+
+// montar params pra API
+const buildParams = () => {
+  // quando detalhe=1 e fields vazio, sugere um conjunto mais rico
+  let fields = form.value.fields
+  if (form.value.detalhe && (!fields || !fields.trim())) {
+    fields = 'cnpj,razao_social,nome_fantasia,localidade,cnae_principal,porte,atualizado_em'
+  }
+  return toApiParams({
+    ...form.value,
+    detalhe: form.value.detalhe, // toApiParams converte para '0'/'1'
+    fields,
   })
 }
 
-function onSearch() {
-  fetchCompaniesImmediate()
+// sugestões que dependem de outros campos
+const fetchCidade = async (q) => {
+  const uf = /^[A-Za-z]{2}$/.test(form.value.localizacao) ? form.value.localizacao : ''
+  return suggestCidade(q, uf)
 }
 
-function verEmpresa(item) {
-  // aqui você pode navegar para a rota /empresa/:cnpj ou abrir um modal
-  alert(`Ver empresa: ${item.nome} (CNPJ: ${item.cnpj})`)
+// chamada à API (com proteção de corrida)
+let lastCallId = 0
+const fetchData = async () => {
+  const callId = ++lastCallId
+  loading.value = true
+  try {
+    const params = buildParams()
+    const { items, total: tt } = await findAllEmpresas(params)
+    if (callId !== lastCallId) return // descarta respostas antigas
+    rows.value = items
+    total.value = tt
+  } catch (e) {
+    console.error('Falha ao carregar', e)
+  } finally {
+    if (callId === lastCallId) loading.value = false
+  }
+}
+const fetchNow = () => fetchData()
+const fetchDebounced = debounce(fetchData, 500)
+
+// paginação
+function goPage(p) {
+  form.value.page = Math.min(Math.max(1, p), totalPages.value)
 }
 
-function exportCsv() {
-  const header = ['codigo', 'nome', 'status', 'atualizado_em', 'localidade']
-  const lines = results.value.map(r => [r.codigo ?? '', r.nome ?? '', r.status ?? '', r.atualizado_em ?? '', r.localidade ?? ''])
-  const csv = [header, ...lines].map(arr => arr.join(';')).join('\n')
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
-  const url = URL.createObjectURL(blob)
+// reagir às mudanças (se filtros mudarem, volta pra página 1)
+watch(
+  form,
+  (nv, ov) => {
+    if (nv.page === ov?.page && nv.pageSize === ov?.pageSize) {
+      form.value.page = 1
+    }
+    fetchDebounced()
+  },
+  { deep: true }
+)
+
+onMounted(() => {
+  fetchNow()
+})
+
+/**
+ * Exportar CSV (cnpj, nome, localidade, emails)
+ * Envia os mesmos filtros atuais para /api/empresas/export,
+ * mas força detalhe=1 e os campos necessários.
+ */
+function baixarCsv() {
+  // monta params a partir do form
+  const params = toApiParams({
+    ...form.value,
+    detalhe: true, // garantir que a view completa seja usada (tem 'emails')
+  })
+
+  // troca os campos para os desejados no CSV
+  params.fields = 'cnpj,nome,localidade,emails'
+
+  // cria querystring
+  const usp = new URLSearchParams()
+  Object.entries(params).forEach(([k, v]) => {
+    if (v !== undefined && v !== null && String(v).trim() !== '') {
+      usp.append(k, v)
+    }
+  })
+
+  // abre rota de export (backend deve responder com CSV)
+  const url = `/api/empresas/export?${usp.toString()}`
   const a = document.createElement('a')
   a.href = url
-  a.download = 'empresas.csv'
+  a.setAttribute('download', 'empresas.csv') // alguns browsers ignoram; header do servidor prevalece
+  document.body.appendChild(a)
   a.click()
-  URL.revokeObjectURL(url)
+  a.remove()
 }
-
-onBeforeUnmount(() => {
-  if (aborter) aborter.abort?.()
-})
 </script>

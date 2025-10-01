@@ -14,7 +14,7 @@ export async function FindAllCnaes(queryParams) {
         arrayFormat: 'repeat',
       })
     : '';
-  const { data } = await http.get(`${controller}${queryString}`);
+  const { data } = await http.get(`${controller}?${queryString}`);
   return data;
 }
 

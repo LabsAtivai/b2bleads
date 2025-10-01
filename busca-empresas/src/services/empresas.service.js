@@ -1,9 +1,8 @@
 // src/services/empresas.service.js
 import qs from 'qs'
-import { get } from '@/api' // seu axios factory (baseURL deve apontar para "/api")
+import { get } from '@/api' // axios factory com baseURL apontando para "/api"
 
 const controller = 'empresas'
-
 
 function compact(obj = {}) {
   const out = {}
@@ -15,33 +14,27 @@ function compact(obj = {}) {
   return out
 }
 
-
 export async function findAllEmpresas(query = {}) {
   const http = await get()
 
-  // valores padrão úteis
   const defaults = {
     page: 1,
-    pageSize: 10,
-    // fields: 'cnpj,nome,localidade,codigo,status,atualizado_em', // exemplo (compacta)
+    pageSize:10,
+    // fields: 'cnpj,nome,localidade,codigo,status,atualizado_em',
     // detalhe: '0',
   }
 
-  // limpa chaves vazias para não poluir a URL
   const params = compact({ ...defaults, ...query })
-
   const queryString = qs.stringify(params, {
-    addQueryPrefix: true,   // já inclui '?'
-    encode: false,          // mantém vírgulas/percentual sem double-encoding
+    addQueryPrefix: true,
+    encode: false,
     allowDots: true,
-    arrayFormat: 'repeat',  // a=1&a=2
+    arrayFormat: 'repeat',
   })
 
   const { data } = await http.get(`${controller}?${queryString}`)
-  // data = { items: [...], total: number }
-  return data
+  return data // { items, total }
 }
-
 
 export async function findEmpresaByCnpj(cnpj) {
   const http = await get()
@@ -57,17 +50,33 @@ export function toApiParams(form = {}) {
   return compact({
     cnaePrincipal: form.cnaePrincipal,
     buscarCnaeSecundario: form.buscarCnaeSecundario ? '1' : undefined,
-    localizacao: form.localizacao,       // 'SP' | '01001000' | '3550308' | 'Sao Paulo'
-    situacao: form.situacao,             // 'ATIVA' | 'INATIVA' | ...
-    tipo: form.tipo,                     // 'Matriz' | 'Filial' (detalhe=1)
+    localizacao: form.localizacao,
+    situacao: form.situacao,
+    tipo: form.tipo,
     naturezaJuridica: form.naturezaJuridica,
     porte: form.porte,
-    capitalSocial: form.capitalSocial,   // '>=100000' | '10000-50000' etc (se habilitado no back)
-    opcaoMei: form.opcaoMei,             // 'S' | 'N' (detalhe=1)
-    opcaoSimples: form.opcaoSimples,     // 'S' | 'N' (detalhe=1)
+    capitalSocial: form.capitalSocial,
+    opcaoMei: form.opcaoMei,
+    opcaoSimples: form.opcaoSimples,
     page: form.page,
     pageSize: form.pageSize,
-    fields: form.fields,                 // csv; ex. compacta: 'cnpj,nome,localidade,codigo,status,atualizado_em'
-    detalhe: form.detalhe ? '1' : form.detalhe,  // '1' para view completa
+    fields: form.fields,
+    detalhe: form.detalhe ? '1' : '0', // garante compatibilidade com backend
   })
+}
+
+export async function exportEmpresasCsv() {
+  const http = await get()
+  const response = await http.get('/empresas/export', {
+    responseType: 'blob' // importante para baixar arquivo
+  })
+
+  // cria link temporário para download
+  const url = window.URL.createObjectURL(new Blob([response.data]))
+  const link = document.createElement('a')
+  link.href = url
+  link.setAttribute('download', 'empresas_porte_DEMAIS.csv')
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
 }

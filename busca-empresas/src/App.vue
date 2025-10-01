@@ -1,6 +1,6 @@
 <template>
-  <div class="p-4 bg-yellow-50 text-yellow-800 rounded-lg mb-4">
-  Componente montado ✅
+  <div class="p-4 bg-orange-50 text-white-800 rounded-lg mb-4 text-align-center">
+  Base Cnaes AtivaAI
 </div>
 
   <div class="min-h-screen bg-slate-50">

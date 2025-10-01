@@ -14,7 +14,7 @@ const baseURL =
 
 const http = axios.create({
   baseURL,
-  timeout: 20000,
+  timeout: 900000,
 })
 
 // ===== Auth opcional (sem depender de Pinia aqui)
