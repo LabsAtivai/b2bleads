@@ -16,6 +16,7 @@ export async function connectMongo() {
       serverSelectionTimeoutMS: 30000,
       connectTimeoutMS: 30000
     })
+    mongoose.set('autoIndex', process.env.NODE_ENV !== 'production');
     console.log("✅ Conectado ao MongoDB com Mongoose!")
   } catch (err) {
     console.error("❌ Erro na conexão:", err.message)

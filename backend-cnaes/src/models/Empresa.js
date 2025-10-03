@@ -9,7 +9,7 @@ const empresaSchema = new mongoose.Schema(
     nome_fantasia: String,
 
     situacao: String,
-    situacao_codigo: String, // '2' = ATIVA (usado no filtro)
+    situacao_codigo: String, // '2' = ATIVA
 
     data_abertura: Date,
 
@@ -18,12 +18,16 @@ const empresaSchema = new mongoose.Schema(
 
     matriz_filial: String, // 'Matriz' | 'Filial'
 
-    // ATENÇÃO: seu filtro usa "codigo" para CNAE principal em alguns pontos da API.
-    // Aqui já existem os dois campos; mantenho ambos.
+    // CNAE principal (e, em alguns datasets, "codigo" também é usado)
     cnae_principal: String,
     cnae_principal_desc: String,
+    codigo: String, // sinônimo em alguns lugares da sua API
 
-    cnaes_secundarios: [String], // array -> precisa de índice multikey
+    // Secundários (array -> multikey)
+    cnaes_secundarios: [String],
+
+    // (Opcional, recomendação de performance)
+    // cnae_all: [String], // principal, codigo e todos os secundários (se usar, crie índice abaixo e remova $or da consulta)
 
     tipo_logradouro: String,
     logradouro: String,
@@ -33,72 +37,73 @@ const empresaSchema = new mongoose.Schema(
     cep: String,
 
     uf: String,
-    cidade: String,       // na API você usou "municipio" em alguns lugares -> alinhar
+    cidade: String, // se parseLocalizacao usar "municipio", alinhar aqui
+    municipio_codigo: String, // opcional: IBGE (se você já usa no filtro)
+
     endereco: String,
 
     telefones: [String],
     emails: [String],
 
-    capital_social: Number, // usado em range -> ótimo estar como Number
+    capital_social: Number, // range-friendly
 
     porte_codigo: String,
     porte: String,
 
-    opcao_simples: String,  // 'S' | 'N'
-    opcao_mei: String,      // 'S' | 'N'
+    opcao_simples: String, // 'S' | 'N'
+    opcao_mei: String,     // 'S' | 'N'
 
     socios: Array,
 
-    localidade: String, // (se usado em busca, considerar índice depois)
+    localidade: String,
     nome: String,
-
-    // Em alguns datasets isso aparece como sinônimo de CNAE principal.
-    // Se você efetivamente usa 'codigo' nos filtros da API, mantenha atualizado aqui.
-    codigo: String,
 
     status: String,
 
-    atualizado_em: Date // usado no sort -> **tem índice**
+    // usado no sort e cursor
+    atualizado_em: Date,
   },
   {
     collection: 'empresas',
-    versionKey: false
+    versionKey: false,
   }
 )
 
 /**
- * ÍNDICES (desempenho)
- * Regra geral:
- * - Indexar todos os campos do filtro.
- * - Colocar 'atualizado_em' por último em muitos compostos para atender o sort.
- * - Para arrays, índice multikey (Mongo faz automaticamente para campos array).
+ * ÍNDICES — nomes padronizados para usar com hint() do lado da API
+ * Regra: filtros de igualdade primeiro, depois ordenação { atualizado_em:-1, _id:-1 } para casar com o sort.
  */
 
 // detalhe por CNPJ
-empresaSchema.index({ cnpj: 1 }, { unique: true })
+empresaSchema.index({ cnpj: 1 }, { unique: true, name: 'ux_cnpj' })
 
-// ordenação padrão
-empresaSchema.index({ atualizado_em: -1 })
+// ordenação base para keyset
+empresaSchema.index({ atualizado_em: -1, _id: -1 }, { name: 'ord_atualizado__id' })
 
-// filtros comuns (com sort encadeado)
-empresaSchema.index({ situacao_codigo: 1, atualizado_em: -1 })
-empresaSchema.index({ matriz_filial: 1, atualizado_em: -1 })
-empresaSchema.index({ natureza_juridica: 1, atualizado_em: -1 })
-empresaSchema.index({ porte: 1, atualizado_em: -1 })
-empresaSchema.index({ opcao_mei: 1, atualizado_em: -1 })
-empresaSchema.index({ opcao_simples: 1, atualizado_em: -1 })
+// filtros comuns + ordenação
+empresaSchema.index({ situacao_codigo: 1, atualizado_em: -1, _id: -1 }, { name: 'sit_ord' })
+empresaSchema.index({ matriz_filial: 1, atualizado_em: -1, _id: -1 }, { name: 'tipo_ord' })
+empresaSchema.index({ natureza_juridica: 1, atualizado_em: -1, _id: -1 }, { name: 'nat_ord' })
+empresaSchema.index({ porte: 1, atualizado_em: -1, _id: -1 }, { name: 'porte_ord' })
+empresaSchema.index({ opcao_mei: 1, atualizado_em: -1, _id: -1 }, { name: 'mei_ord' })
+empresaSchema.index({ opcao_simples: 1, atualizado_em: -1, _id: -1 }, { name: 'simples_ord' })
 
-// cnae principal (considere padronizar a API para usar cnae_principal)
-empresaSchema.index({ cnae_principal: 1, atualizado_em: -1 })
-empresaSchema.index({ codigo: 1, atualizado_em: -1 }) // se você realmente usa 'codigo' nos filtros
+// cnae principal (e "codigo" se você ainda filtra por ele)
+empresaSchema.index({ cnae_principal: 1, atualizado_em: -1, _id: -1 }, { name: 'cnae_princ_ord' })
+empresaSchema.index({ codigo: 1, atualizado_em: -1, _id: -1 }, { name: 'codigo_princ_ord' })
 
-// cnaes secundários (array -> multikey)
-empresaSchema.index({ cnaes_secundarios: 1, atualizado_em: -1 })
+// cnaes secundários (multikey)
+empresaSchema.index({ cnaes_secundarios: 1, atualizado_em: -1, _id: -1 }, { name: 'cnae_sec_ord' })
 
-// localização: alinhe com o que parseLocalizacao retorna (aqui: uf/cidade/cep)
-empresaSchema.index({ uf: 1, cidade: 1, cep: 1, atualizado_em: -1 })
+// localização (alinhe com parseLocalizacao)
+empresaSchema.index({ uf: 1, municipio_codigo: 1, atualizado_em: -1, _id: -1 }, { name: 'loc_ord' })
+// fallback se você não usa municipio_codigo: uf/cidade/cep
+empresaSchema.index({ uf: 1, cidade: 1, cep: 1, atualizado_em: -1, _id: -1 }, { name: 'loc_fallback_ord' })
 
-// capital social (se usa range gte/lte)
-empresaSchema.index({ capital_social: 1, atualizado_em: -1 })
+// capital social (ranges)
+empresaSchema.index({ capital_social: 1, atualizado_em: -1, _id: -1 }, { name: 'capital_ord' })
+
+// (Opcional) Index se você denormalizar cnae_all
+// empresaSchema.index({ cnae_all: 1, atualizado_em: -1, _id: -1 }, { name: 'cnae_all_ord' })
 
 export default mongoose.model('Empresa', empresaSchema)
