@@ -7,14 +7,8 @@
         <!-- CNAE principal (com autocomplete) -->
         <div>
           <label class="block text-sm font-medium text-slate-700">CNAE principal</label>
-          <Typeahead
-            v-model="form.cnaePrincipal"
-            placeholder="ex: 6201501 ou digite para buscar"
-            :minChars="2"
-            :fetcher="suggestCnae"
-            :clearOnSelect="false"
-            class="mt-1"
-          />
+          <Typeahead v-model="form.cnaePrincipal" placeholder="ex: 6201501 ou digite para buscar" :minChars="2"
+            :fetcher="suggestCnae" :clearOnSelect="false" class="mt-1" />
           <label class="inline-flex items-center gap-2 mt-2 text-sm">
             <input type="checkbox" v-model="form.buscarCnaeSecundario" class="checkbox" />
             Buscar também em CNAEs secundários
@@ -25,22 +19,11 @@
         <div>
           <label class="block text-sm font-medium text-slate-700">Localização</label>
           <div class="flex gap-2 mt-1">
-            <Typeahead
-              v-model="quickUf"
-              placeholder="UF (ex: SP)"
-              :minChars="1"
-              :fetcher="suggestUf"
-              class="flex-1"
-            />
+            <Typeahead v-model="quickUf" placeholder="UF (ex: SP)" :minChars="1" :fetcher="suggestUf" class="flex-1" />
             <button class="btn btn-outline" @click="aplicarUf()" :disabled="!quickUf">Aplicar</button>
           </div>
-          <Typeahead
-            v-model="form.localizacao"
-            placeholder="Cidade (ex: Sao Paulo)"
-            :minChars="2"
-            :fetcher="fetchCidade"
-            class="mt-2"
-          />
+          <Typeahead v-model="form.localizacao" placeholder="Cidade (ex: Sao Paulo)" :minChars="2"
+            :fetcher="fetchCidade" class="mt-2" />
           <p class="text-xs text-slate-500 mt-1">
             Você também pode digitar CEP (8 dígitos) ou código IBGE (7) diretamente.
           </p>
@@ -75,13 +58,8 @@
         <!-- Porte (somente detalhe=1) -->
         <div v-if="form.detalhe">
           <label class="block text-sm font-medium text-slate-700">Porte</label>
-          <Typeahead
-            v-model="form.porte"
-            placeholder="Digite para filtrar portes"
-            :minChars="0"
-            :fetcher="suggestPorte"
-            class="mt-1"
-          />
+          <Typeahead v-model="form.porte" placeholder="Digite para filtrar portes" :minChars="0" :fetcher="suggestPorte"
+            class="mt-1" />
         </div>
 
         <!-- Tipo (matriz/filial) (somente detalhe=1) -->
@@ -97,13 +75,8 @@
         <!-- Natureza Jurídica (somente detalhe=1) -->
         <div v-if="form.detalhe">
           <label class="block text-sm font-medium text-slate-700">Natureza Jurídica</label>
-          <Typeahead
-            v-model="form.naturezaJuridica"
-            placeholder="Digite para buscar natureza"
-            :minChars="2"
-            :fetcher="suggestNatureza"
-            class="mt-1"
-          />
+          <Typeahead v-model="form.naturezaJuridica" placeholder="Digite para buscar natureza" :minChars="2"
+            :fetcher="suggestNatureza" class="mt-1" />
         </div>
 
         <!-- Simples/MEI (somente detalhe=1) -->
@@ -127,11 +100,8 @@
         <!-- Campos -->
         <div class="sm:col-span-2 lg:col-span-2">
           <label class="block text-sm font-medium text-slate-700">Campos</label>
-          <input
-            v-model="form.fields"
-            class="input mt-1"
-            :placeholder="form.detalhe ? 'Ex: cnpj,razao_social,nome_fantasia,localidade,cnae_principal,porte,atualizado_em' : 'Ex: cnpj,nome,localidade,codigo,status,atualizado_em'"
-          />
+          <input v-model="form.fields" class="input mt-1"
+            :placeholder="form.detalhe ? 'Ex: cnpj,razao_social,nome_fantasia,localidade,cnae_principal,porte,atualizado_em' : 'Ex: cnpj,nome,localidade,codigo,status,atualizado_em'" />
           <p class="text-xs text-slate-500 mt-1">
             Deixe em branco para usar os padrões do backend. Use os nomes do mapa de campos da view escolhida.
           </p>
@@ -155,12 +125,7 @@
         <div>
           <div class="text-sm font-medium text-slate-700 mb-1">UF (nos resultados)</div>
           <div class="flex flex-wrap gap-2">
-            <button
-              v-for="uf in facetUf"
-              :key="uf"
-              class="btn btn-outline"
-              @click="aplicarFacetaUf(uf)"
-            >
+            <button v-for="uf in facetUf" :key="uf" class="btn btn-outline" @click="aplicarFacetaUf(uf)">
               {{ uf }}
             </button>
           </div>
@@ -168,12 +133,7 @@
         <div class="sm:col-span-2">
           <div class="text-sm font-medium text-slate-700 mb-1">Cidades (nos resultados)</div>
           <div class="flex flex-wrap gap-2 max-h-28 overflow-auto pr-2">
-            <button
-              v-for="cid in facetCidade"
-              :key="cid"
-              class="btn btn-outline"
-              @click="aplicarFacetaCidade(cid)"
-            >
+            <button v-for="cid in facetCidade" :key="cid" class="btn btn-outline" @click="aplicarFacetaCidade(cid)">
               {{ cid }}
             </button>
           </div>
@@ -197,8 +157,9 @@
           </thead>
           <tbody class="divide-y divide-slate-200 text-sm">
             <tr v-for="it in rows" :key="it.cnpj" class="hover:bg-slate-50">
-              <td class="px-4 py-2 font-mono">{{ it.cnpj }}</td>
-              <td class="px-4 py-2">{{ it.nome || it.nome_fantasia || it.razao_social }}</td>
+              {{ it }}
+              <td class="px-4 py-2 font-mono">{{ it.cnpjBasico }}</td>
+              <td class="px-4 py-2">{{ it.nome || it.nome_fantasia || it.razaoSocial }}</td>
               <td class="px-4 py-2">{{ it.localidade || (it.cidade && it.uf ? `${it.cidade} - ${it.uf}` : '') }}</td>
               <td class="px-4 py-2">{{ it.codigo || it.cnae_principal }}</td>
               <td class="px-4 py-2">{{ it.status || it.situacao }}</td>
@@ -214,8 +175,10 @@
           Página {{ form.page }} de {{ totalPages }}
         </div>
         <div class="flex gap-2">
-          <button class="btn btn-outline" :disabled="form.page <= 1 || loading" @click="goPage(form.page - 1)">Anterior</button>
-          <button class="btn btn-outline" :disabled="form.page >= totalPages || loading" @click="goPage(form.page + 1)">Próxima</button>
+          <button class="btn btn-outline" :disabled="form.page <= 1 || loading"
+            @click="goPage(form.page - 1)">Anterior</button>
+          <button class="btn btn-outline" :disabled="form.page >= totalPages || loading"
+            @click="goPage(form.page + 1)">Próxima</button>
         </div>
       </div>
     </div>
