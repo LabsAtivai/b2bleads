@@ -157,7 +157,7 @@
           </thead>
           <tbody class="divide-y divide-slate-200 text-sm">
             <tr v-for="it in rows" :key="it.cnpj" class="hover:bg-slate-50">
-              <td class="px-4 py-2 font-mono">{{ it.cnpjBasico }}</td>
+              <td class="px-4 py-2 font-mono">{{ it.estabelecimentos[0].cnpj }}</td>
               <td class="px-4 py-2">{{ it.nome || it.nome_fantasia || it.razaoSocial }}</td>
               <td class="px-4 py-2">{{ it.estabelecimentos[0].endereco.tipoLogradouro }} {{
                 it.estabelecimentos[0].endereco.logradouro }}, {{
