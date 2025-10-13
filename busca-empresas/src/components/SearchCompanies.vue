@@ -157,13 +157,16 @@
           </thead>
           <tbody class="divide-y divide-slate-200 text-sm">
             <tr v-for="it in rows" :key="it.cnpj" class="hover:bg-slate-50">
-              {{ it }}
               <td class="px-4 py-2 font-mono">{{ it.cnpjBasico }}</td>
               <td class="px-4 py-2">{{ it.nome || it.nome_fantasia || it.razaoSocial }}</td>
-              <td class="px-4 py-2">{{ it.localidade || (it.cidade && it.uf ? `${it.cidade} - ${it.uf}` : '') }}</td>
-              <td class="px-4 py-2">{{ it.codigo || it.cnae_principal }}</td>
-              <td class="px-4 py-2">{{ it.status || it.situacao }}</td>
-              <td class="px-4 py-2">{{ it.atualizado_em }}</td>
+              <td class="px-4 py-2">{{ it.estabelecimentos[0].endereco.tipoLogradouro }} {{
+                it.estabelecimentos[0].endereco.logradouro }}, {{
+                  it.estabelecimentos[0].endereco.numero }} - {{ it.estabelecimentos[0].endereco.bairro }} - {{
+                  it.estabelecimentos[0].endereco.municipio.descricao }} - {{ it.estabelecimentos[0].endereco.uf }} ({{
+                  it.estabelecimentos[0].endereco.cep }})</td>
+              <td class="px-4 py-2">{{ it.estabelecimentos[0].cnaeFiscalPrincipal.codigo }}</td>
+              <td class="px-4 py-2">{{ it.estabelecimentos[0].motivoSituacaoCadastral.descricao }}</td>
+              <td class="px-4 py-2">{{ it.updatedAt }}</td>
             </tr>
           </tbody>
         </table>
@@ -318,6 +321,8 @@ const fetchData = async () => {
     if (callId !== lastCallId) return // descarta respostas antigas
     rows.value = items
     total.value = tt
+
+    console.log(rows.value);
   } catch (e) {
     console.error('Falha ao carregar', e)
   } finally {
