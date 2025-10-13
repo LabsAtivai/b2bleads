@@ -172,16 +172,16 @@ const likeField = (field, val) => ({
       // Natureza jurídica (código/descrição)
       if (p.naturezaJuridica) {
         or.push(
-          { natureza_juridica: like(p.naturezaJuridica) },
-          { natureza_juridica_desc: like(p.naturezaJuridica) }
+          { natureza:{codigo:like(p.naturezaJuridica)} },
+          { naturezadesc:{descricao:like(p.naturezaJuridica)}}
         )
       }
 
       // Porte (código/descrição)
       if (p.porte) {
         or.push(
-          { porte: like(p.porte) },
-          { porte_codigo: like(p.porte) }
+          { porte:{codigo:like(p.porte)} },
+          { porte_codigo:{codigo:like(p.porte)}  }
         )
       }
 
