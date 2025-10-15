@@ -7,6 +7,8 @@ import { z } from 'zod'
 import { connectMongo } from './db.js'
 import Empresa from './models/Empresa.js'
 import { parseCapitalSocial } from './filters.js'
+import { MongoClient } from 'mongodb';  // Importando MongoClient
+
 
 mongoose.set('autoIndex', process.env.NODE_ENV !== 'production')
 
@@ -129,6 +131,34 @@ const likeField = (field, val) => ({
       }
     })
 
+    app.get("/api/dados-ruins", async (req, res) => {
+
+      async function countPorteNaoAtiva() {
+        const uri = `mongodb://${process.env.DB_USER}:${process.env.DB_PASS}@${process.env.DB_HOST}:${process.env.DB_PORT || 27017}/${process.env.DB_NAME}?authSource=admin`
+        const client = new MongoClient(uri, { useNewUrlParser: true, useUnifiedTopology: true });
+
+        try {
+          const db = client.db(); // Acessando o banco de dados
+          const collection = db.collection('empresas_agg'); // Nome da coleção que contém os dados
+
+          // Consulta para contar documentos onde 'porte.codigo' NÃO é igual a "02"
+          const count = await collection.countDocuments({
+            "estabelecimentos[0].porte.codigo": { $ne: "02" } // $ne é o operador para "não é igual"
+          });
+
+          console.log(`Quantidade de documentos que seriam excluídos: ${count}`);
+          res.json({ count }); // Retornando o resultado para o cliente
+        } catch (err) {
+          console.error("Erro ao contar documentos:", err);
+          res.status(500).json({ error: "Erro ao contar documentos" }); // Retorna erro em caso de falha
+        } finally {
+          await client.close(); // Fecha a conexão com o banco de dados
+        }
+      }
+
+      countPorteNaoAtiva();
+    });
+
     // DEBUG – índices
     app.get('/debug/indexes', async (_req, res) => {
       const idx = await Empresa.collection.indexes()
@@ -172,16 +202,16 @@ const likeField = (field, val) => ({
       // Natureza jurídica (código/descrição)
       if (p.naturezaJuridica) {
         or.push(
-          { natureza:{codigo:like(p.naturezaJuridica)} },
-          { naturezadesc:{descricao:like(p.naturezaJuridica)}}
+          { natureza: { codigo: like(p.naturezaJuridica) } },
+          { naturezadesc: { descricao: like(p.naturezaJuridica) } }
         )
       }
 
       // Porte (código/descrição)
       if (p.porte) {
         or.push(
-          { porte:{codigo:like(p.porte)} },
-          { porte_codigo:{codigo:like(p.porte)}  }
+          { porte: { codigo: like(p.porte) } },
+          { porte_codigo: { codigo: like(p.porte) } }
         )
       }
 
