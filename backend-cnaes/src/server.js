@@ -298,133 +298,136 @@ function timingHeader(_req, res, next) {
 
 
   // ======= EXPORTAÇÃO CSV (versão enxuta e otimizada) =======
-  app.get("/api/empresas.csv", timingHeader, async (req, res) => {
-    let p;
-    try {
-      p = SearchSchema.parse(req.query);
-    } catch (e) {
+  // ======= EXPORTAÇÃO CSV (com Natureza Jurídica incluída) =======
+app.get("/api/empresas.csv", timingHeader, async (req, res) => {
+  let p;
+  try {
+    p = SearchSchema.parse(req.query);
+  } catch (e) {
+    return res
+      .status(400)
+      .json({ error: "Parâmetros inválidos", detail: e.message });
+  }
+
+  const and = [];
+  const or = [];
+
+  // === Filtros principais (iguais à listagem) ===
+  if (p.nome) or.push({ razaoSocial: like(p.nome) });
+  if (p.nomeFantasia) or.push({ "estabelecimentos.nomeFantasia": like(p.nomeFantasia) });
+  if (p.cnpj) or.push({ "estabelecimentos.cnpj": like(p.cnpj) });
+  if (p.email) or.push({ "estabelecimentos.contatos.email": like(p.email) });
+
+  if (p.cnaePrincipal) {
+    const rx = like(p.cnaePrincipal);
+    or.push(
+      { "estabelecimentos.cnaeFiscalPrincipal.codigo": rx },
+      { "estabelecimentos.cnaeFiscalPrincipal.descricao": rx }
+    );
+  }
+
+  if (p.localizacao) {
+    or.push(
+      likeField("estabelecimentos.endereco.uf", p.localizacao),
+      likeField("estabelecimentos.endereco.municipio.descricao", p.localizacao),
+      likeField("estabelecimentos.endereco.cep", p.localizacao)
+    );
+  }
+
+  if (p.situacao) {
+    const sit = p.situacao.toUpperCase();
+    if (sit === "ATIVA") {
+      or.push({ "estabelecimentos.situacaoCadastral": like("04") });
+    } else if (sit === "INATIVA") {
+      or.push({
+        "estabelecimentos.situacaoCadastral": {
+          $in: INATIVA_CODES.map((c) => like(c)),
+        },
+      });
+    } else {
+      or.push({ "estabelecimentos.situacaoCadastral": like(sit) });
+    }
+  }
+
+  if (or.length) and.push({ $or: or });
+  const filter = and.length ? { $and: and } : {};
+
+  try {
+    const filename = `empresas_${new Date()
+      .toISOString()
+      .slice(0, 19)
+      .replace(/[:T]/g, "-")}.csv`;
+
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.setHeader("Cache-Control", "no-cache");
+    res.write("\uFEFF"); // BOM UTF-8 p/ Excel
+
+    // Cabeçalho do CSV
+    const header = [
+      "CNPJ",
+      "RazaoSocial",
+      "NomeFantasia",
+      "Email",
+      "CidadeUF",
+      "CNAE",
+      "Telefone",
+      "Porte",
+      "NaturezaJuridica"
+    ];
+    res.write(header.join(",") + "\r\n");
+
+    // Função utilitária p/ escapar strings CSV
+    const csvEscape = (val) => {
+      if (val === null || val === undefined) return "";
+      let s = String(val).replace(/"/g, '""');
+      return `"${s}"`;
+    };
+
+    // Cursor (stream eficiente)
+    const cursor = Empresa.find(filter)
+      .sort({ _id: -1 })
+      .read(READ_PREFERENCE)
+      .lean()
+      .cursor({ batchSize: 500 });
+
+    for await (const doc of cursor) {
+      const est = doc.estabelecimentos?.[0] || {};
+      const endereco = est.endereco || {};
+      const contatos = est.contatos || {};
+
+      const cidadeUf = [
+        endereco.municipio?.descricao || "",
+        endereco.uf || ""
+      ]
+        .filter(Boolean)
+        .join(" - ");
+
+      const line = [
+        csvEscape(est.cnpj || ""),
+        csvEscape(doc.razaoSocial || ""),
+        csvEscape(est.nomeFantasia || ""),
+        csvEscape(contatos.email || ""),
+        csvEscape(cidadeUf),
+        csvEscape(est.cnaeFiscalPrincipal?.codigo || ""),
+        csvEscape(contatos.telefone1 || contatos.telefone2 || ""),
+        csvEscape(doc.porte?.descricao || ""),
+        csvEscape(doc.natureza?.descricao || "")
+      ].join(",");
+
+      res.write(line + "\r\n");
+    }
+
+    res.end();
+  } catch (e) {
+    console.error("[empresas.csv] erro:", e);
+    if (!res.headersSent)
       return res
-        .status(400)
-        .json({ error: "Parâmetros inválidos", detail: e.message });
-    }
-
-    const and = [];
-    const or = [];
-
-    // === Filtros principais (iguais à listagem) ===
-    if (p.nome) or.push({ razaoSocial: like(p.nome) });
-    if (p.nomeFantasia) or.push({ "estabelecimentos.nomeFantasia": like(p.nomeFantasia) });
-    if (p.cnpj) or.push({ "estabelecimentos.cnpj": like(p.cnpj) });
-    if (p.email) or.push({ "estabelecimentos.contatos.email": like(p.email) });
-
-    if (p.cnaePrincipal) {
-      const rx = like(p.cnaePrincipal);
-      or.push(
-        { "estabelecimentos.cnaeFiscalPrincipal.codigo": rx },
-        { "estabelecimentos.cnaeFiscalPrincipal.descricao": rx }
-      );
-    }
-
-    if (p.localizacao) {
-      or.push(
-        likeField("estabelecimentos.endereco.uf", p.localizacao),
-        likeField("estabelecimentos.endereco.municipio.descricao", p.localizacao),
-        likeField("estabelecimentos.endereco.cep", p.localizacao)
-      );
-    }
-
-    if (p.situacao) {
-      const sit = p.situacao.toUpperCase();
-      if (sit === "ATIVA") {
-        or.push({ "estabelecimentos.situacaoCadastral": like("04") });
-      } else if (sit === "INATIVA") {
-        or.push({
-          "estabelecimentos.situacaoCadastral": {
-            $in: INATIVA_CODES.map((c) => like(c)),
-          },
-        });
-      } else {
-        or.push({ "estabelecimentos.situacaoCadastral": like(sit) });
-      }
-    }
-
-    if (or.length) and.push({ $or: or });
-    const filter = and.length ? { $and: and } : {};
-
-    try {
-      const filename = `empresas_${new Date()
-        .toISOString()
-        .slice(0, 19)
-        .replace(/[:T]/g, "-")}.csv`;
-
-      res.setHeader("Content-Type", "text/csv; charset=utf-8");
-      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-      res.setHeader("Cache-Control", "no-cache");
-      res.write("\uFEFF"); // BOM UTF-8 p/ Excel
-
-      // Cabeçalho do CSV
-      const header = [
-        "CNPJ",
-        "RazaoSocial",
-        "NomeFantasia",
-        "Email",
-        "CidadeUF",
-        "CNAE",
-        "Telefone",
-        "Porte"
-      ];
-      res.write(header.join(",") + "\r\n");
-
-      // Função utilitária p/ escapar strings CSV
-      const csvEscape = (val) => {
-        if (val === null || val === undefined) return "";
-        let s = String(val).replace(/"/g, '""');
-        return `"${s}"`;
-      };
-
-      // Cursor (stream eficiente)
-      const cursor = Empresa.find(filter)
-        .sort({ _id: -1 })
-        .read(READ_PREFERENCE)
-        .lean()
-        .cursor({ batchSize: 500 });
-
-      for await (const doc of cursor) {
-        const est = doc.estabelecimentos?.[0] || {};
-        const endereco = est.endereco || {};
-        const contatos = est.contatos || {};
-
-        const cidadeUf = [
-          endereco.municipio?.descricao || "",
-          endereco.uf || ""
-        ]
-          .filter(Boolean)
-          .join(" - ");
-
-        const line = [
-          csvEscape(est.cnpj || ""),
-          csvEscape(doc.razaoSocial || ""),
-          csvEscape(est.nomeFantasia || ""),
-          csvEscape(contatos.email || ""),
-          csvEscape(cidadeUf),
-          csvEscape(est.cnaeFiscalPrincipal?.codigo || ""),
-          csvEscape(contatos.telefone1 || contatos.telefone2 || ""),
-          csvEscape(doc.porte?.descricao || "")
-        ].join(",");
-
-        res.write(line + "\r\n");
-      }
-
-      res.end();
-    } catch (e) {
-      console.error("[empresas.csv] erro:", e);
-      if (!res.headersSent)
-        return res
-          .status(500)
-          .json({ error: "Erro ao exportar CSV", detail: e.message });
-      else res.end();
-    }
-  });
+        .status(500)
+        .json({ error: "Erro ao exportar CSV", detail: e.message });
+    else res.end();
+  }
+});
 
 
 
