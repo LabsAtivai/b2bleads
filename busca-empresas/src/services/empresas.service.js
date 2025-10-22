@@ -46,8 +46,11 @@ export async function findEmpresaByCnpj(cnpj) {
   return data
 }
 
+// src/services/empresas.service.js
 export function toApiParams(form = {}) {
   return compact({
+    nome: form.nome,
+    nomeFantasia: form.nomeFantasia,
     cnaePrincipal: form.cnaePrincipal,
     buscarCnaeSecundario: form.buscarCnaeSecundario ? '1' : undefined,
     localizacao: form.localizacao,
@@ -58,12 +61,12 @@ export function toApiParams(form = {}) {
     capitalSocial: form.capitalSocial,
     opcaoMei: form.opcaoMei,
     opcaoSimples: form.opcaoSimples,
-    page: form.page,
     pageSize: form.pageSize,
-    fields: form.fields,
-    detalhe: form.detalhe ? '1' : '0', // garante compatibilidade com backend
+    cursor: form.cursor,
+    detalhe: form.detalhe ? '1' : '0',
   })
 }
+
 
 export async function exportEmpresasCsv() {
   const http = await get()
@@ -75,7 +78,7 @@ export async function exportEmpresasCsv() {
   const url = window.URL.createObjectURL(new Blob([response.data]))
   const link = document.createElement('a')
   link.href = url
-  link.setAttribute('download', 'empresas_porte_DEMAIS.csv')
+  link.setAttribute('download', 'BaseB2B.csv')
   document.body.appendChild(link)
   link.click()
   link.remove()
