@@ -1,9 +1,9 @@
 <template>
   <div class="relative" @keydown.down.prevent="move(1)" @keydown.up.prevent="move(-1)" @keydown.enter.prevent="chooseActive()">
-    <label v-if="label" class="block text-sm font-medium text-slate-700">{{ label }}</label>
+    <label v-if="label" class="block text-sm font-medium text-slate-700 mb-1">{{ label }}</label>
     <input
       :placeholder="placeholder"
-      class="input mt-1"
+      class="input w-full"
       v-model="inner"
       @focus="open = true; fetchDebounced()"
       @input="onInput"
@@ -77,7 +77,7 @@ function onInput() {
 }
 
 function onBlur() {
-  setTimeout(() => open.value = false, 120)
+  setTimeout(() => open.value = false, 150)
 }
 
 function move(dir) {
