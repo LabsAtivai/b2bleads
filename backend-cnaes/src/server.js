@@ -4,6 +4,8 @@ import express from "express";
 import cors from "cors";
 import mongoose from "mongoose";
 import { z } from "zod";
+import ExcelJS from "exceljs";
+
 import { connectMongo } from "./db.js";
 import Empresa from "./models/Empresa.js";
 import { parseCapitalSocial } from "./filters.js";
@@ -11,10 +13,11 @@ import { parseCapitalSocial } from "./filters.js";
 mongoose.set("autoIndex", process.env.NODE_ENV !== "production");
 
 // ======= CONFIG =======
-const READ_PREFERENCE = process.env.MONGO_READ_PREFERENCE || "primaryPreferred";
+const READ_PREFERENCE =
+  process.env.MONGO_READ_PREFERENCE || "primaryPreferred";
 const DEFAULT_PAGE_SIZE = 10;
 const MAX_TIME_MS_PRIMARY = Number(process.env.MAX_TIME_MS || 2000);
-const MAX_TIME_MS_RETRY = Number(process.env.MAX_TIME_MS_RETRY || 4000);
+const MAX_TIME_MS_RETRY = Number(process.env.MAX_TIME_MS_RETRY || 8000);
 
 const INATIVA_CODES = (process.env.INATIVA_CODES || "1,3,4,8,9")
   .split(",")
@@ -24,37 +27,6 @@ const INATIVA_CODES = (process.env.INATIVA_CODES || "1,3,4,8,9")
 // ======= HELPERS =======
 const reEscape = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const like = (s) => new RegExp(reEscape(String(s)), "i");
-
-function likeField(field, val) {
-  // Versão segura: ignora erro se o campo for array
-  return {
-    $or: [
-      { [field]: like(val) },
-      {
-        $expr: {
-          $regexMatch: {
-            input: {
-              $cond: {
-                if: { $isArray: `$${field}` },
-                then: {
-                  $reduce: {
-                    input: `$${field}`,
-                    initialValue: "",
-                    in: { $concat: ["$$value", " ", { $toString: "$$this" }] }
-                  }
-                },
-                else: { $toString: `$${field}` }
-              }
-            },
-            regex: reEscape(String(val)),
-            options: "i",
-          },
-        },
-      },
-    ],
-  };
-}
-
 
 function encodeCursor(doc) {
   return Buffer.from(JSON.stringify({ id: String(doc._id) })).toString(
@@ -70,6 +42,50 @@ function decodeCursor(str) {
     return null;
   }
 }
+
+// ======= PORTE HELPER =======
+function buildPorteFilter(porteInput) {
+  if (!porteInput) return null;
+
+  const porte = String(porteInput).trim().toUpperCase();
+
+  // Tabela oficial de porte:
+  // 1  - NÃO INFORMADO
+  // 2  - MICRO EMPRESA
+  // 03 - EMPRESA DE PEQUENO PORTE
+  // 05 - DEMAIS
+  const map = {
+    "1": ["1", "01", "NÃO INFORMADO"],
+    "2": ["2", "02", "MICRO EMPRESA"],
+    "3": ["3", "03", "EMPRESA DE PEQUENO PORTE"],
+    "5": ["5", "05", "DEMAIS"],
+  };
+
+  let keys = [];
+
+  // Se vier "1", "2", "3", "5"
+  if (map[porte]) {
+    keys = map[porte];
+  } else {
+    // Se vier "MICRO", "DEMAIS", etc.
+    Object.values(map).forEach(arr => {
+      if (arr.some(v => v.includes(porte))) {
+        keys.push(...arr);
+      }
+    });
+  }
+
+  if (!keys.length) return null;
+
+  return {
+    $or: [
+      { "porte.codigo": { $in: keys } },
+      { "porte.descricao": { $in: keys } },
+    ],
+  };
+}
+
+
 function toObjectId(id) {
   try {
     return new mongoose.Types.ObjectId(id);
@@ -78,11 +94,13 @@ function toObjectId(id) {
   }
 }
 
+
+
 // ======= Zod schema =======
 const SearchSchema = z.object({
   nome: z.string().optional(),
   nomeFantasia: z.string().optional(),
-  cnpj: z.string().optional(), // ✅ ADICIONE ESTA LINHA
+  cnpj: z.string().optional(),
   cnaePrincipal: z.string().optional(),
   buscarCnaeSecundario: z.union([z.literal("1"), z.literal("0")]).optional(),
   localizacao: z.string().optional(),
@@ -91,6 +109,7 @@ const SearchSchema = z.object({
   naturezaJuridica: z.string().optional(),
   porte: z.string().optional(),
   capitalSocial: z.string().optional(),
+  email: z.string().optional(),
   page: z.coerce.number().min(1).default(1),
   pageSize: z.coerce.number().min(1).max(100).default(DEFAULT_PAGE_SIZE),
   cursor: z.string().optional(),
@@ -144,23 +163,46 @@ function timingHeader(_req, res, next) {
     const and = [];
     const or = [];
 
-    // Razão social / nome fantasia
-    if (p.nome) or.push({ razaoSocial: like(p.nome) });
-    // ✅ Filtro por CNPJ
-    if (p.cnpj) or.push({ "estabelecimentos.cnpj": like(p.cnpj) });
+    // ===== Razão social / nome fantasia =====
+    if (p.nome) {
+      or.push({ razaoSocial: like(p.nome) });
+    }
 
-    if (p.nomeFantasia)
+    if (p.nomeFantasia) {
       or.push({ "estabelecimentos.nomeFantasia": like(p.nomeFantasia) });
+    }
 
-    // Situação
+    // ===== CNPJ =====
+    if (p.cnpj) {
+      const cnpjDigits = p.cnpj.replace(/\D/g, "");
+      if (cnpjDigits.length === 14) {
+        or.push({ "estabelecimentos.cnpj": cnpjDigits });
+      } else if (cnpjDigits.length > 0) {
+        or.push({
+          "estabelecimentos.cnpj": new RegExp(reEscape(cnpjDigits)),
+        });
+      }
+    }
+
+    // ===== Email (flatten + legado) =====
+    if (p.email) {
+      const rx = like(p.email);
+      or.push(
+        { "estabelecimentos.email": rx },
+        { "estabelecimentos.contatos.email": rx }
+      );
+    }
+
+    // ===== Situação cadastral =====
     if (p.situacao) {
       const sit = p.situacao.toUpperCase();
       if (sit === "ATIVA") {
-        or.push({ "estabelecimentos.situacaoCadastral": like("04") });
+        // na base nova: "02"
+        or.push({ "estabelecimentos.situacaoCadastral": "02" });
       } else if (sit === "INATIVA") {
         or.push({
           "estabelecimentos.situacaoCadastral": {
-            $in: INATIVA_CODES.map((c) => like(c)),
+            $in: INATIVA_CODES,
           },
         });
       } else {
@@ -168,40 +210,52 @@ function timingHeader(_req, res, next) {
       }
     }
 
-    // Porte
+    // ===== Porte =====
     if (p.porte) {
-      or.push(
-        { "porte.descricao": like(p.porte) },
-        { "porte.codigo": like(p.porte) }
-      );
+      const porteFilter = buildPorteFilter(p.porte);
+      if (porteFilter) {
+        or.push(porteFilter);
+      }
     }
 
-    // Natureza jurídica
+    // ===== Natureza jurídica =====
     if (p.naturezaJuridica) {
-      or.push(
-        { "natureza.codigo": like(p.naturezaJuridica) },
-        { "natureza.descricao": like(p.naturezaJuridica) }
-      );
+      const rx = like(p.naturezaJuridica);
+      or.push({ "natureza.codigo": rx }, { "natureza.descricao": rx });
     }
 
-    // CNAE principal e secundário
-    // CNAE principal
+    // ===== CNAE principal (aceita "4781400", "47.81-4-00", "47.81/4-00" ou nome) =====
     if (p.cnaePrincipal) {
-      const rx = like(p.cnaePrincipal);
+      const rawCnae = p.cnaePrincipal.trim();
+      const digits = rawCnae.replace(/\D/g, ""); // remove ".", "-", "/"
+      const rx = like(rawCnae);
+
+      // se tiver pelo menos 4 dígitos, tratamos como código
+      if (digits.length >= 4) {
+        or.push({ "estabelecimentos.cnaeFiscalPrincipalCodigo": digits });
+      }
+
+      // também busca no objeto principal (código e descrição)
       or.push(
         { "estabelecimentos.cnaeFiscalPrincipal.codigo": rx },
         { "estabelecimentos.cnaeFiscalPrincipal.descricao": rx }
       );
     }
 
-    // CNAE secundário (independente do flag buscarCnaeSecundario)
+    // ===== CNAE secundário (opcional) =====
     if (p.buscarCnaeSecundario === "1" && p.cnaePrincipal) {
-      const rxSec = like(p.cnaePrincipal);
-      or.push({ "estabelecimentos.cnaesSecundariosCodigos": rxSec });
+      const rawCnae = p.cnaePrincipal.trim();
+      const digits = rawCnae.replace(/\D/g, "");
+      const rxSec = like(rawCnae);
+
+      if (digits.length >= 4) {
+        or.push({ "estabelecimentos.cnaesSecundariosCodigos": digits });
+      } else {
+        or.push({ "estabelecimentos.cnaesSecundariosCodigos": rxSec });
+      }
     }
 
-    // Localização (cidade, UF, CEP)
-    // ===== Localização (corrigido e robusto) =====
+    // ===== Localização (cidade, UF, CEP) =====
     if (p.localizacao) {
       const raw = p.localizacao.trim();
       const hasDash = raw.includes("-");
@@ -209,18 +263,19 @@ function timingHeader(_req, res, next) {
       const isCep = /^\d{5}-?\d{3}$/.test(raw);
 
       if (hasDash) {
-        // "Cidade - UF"
-        const [cidade, uf] = raw.split("-").map((s) => s.trim().toUpperCase());
+        const [cidade, uf] = raw.split("-").map((s) => s.trim());
         and.push({
           estabelecimentos: {
             $elemMatch: {
-              "endereco.municipio.descricao": new RegExp(cidade, "i"),
-              "endereco.uf": uf,
+              "endereco.municipio.descricao": new RegExp(
+                reEscape(cidade),
+                "i"
+              ),
+              "endereco.uf": uf.toUpperCase(),
             },
           },
         });
       } else if (isUf) {
-        // Apenas UF
         and.push({
           estabelecimentos: {
             $elemMatch: {
@@ -229,27 +284,29 @@ function timingHeader(_req, res, next) {
           },
         });
       } else if (isCep) {
-        // CEP
+        const cepDigits = raw.replace(/\D/g, "");
         and.push({
           estabelecimentos: {
             $elemMatch: {
-              "endereco.cep": raw.replace(/\D/g, ""),
+              "endereco.cep": cepDigits,
             },
           },
         });
       } else {
-        // Apenas cidade
         and.push({
           estabelecimentos: {
             $elemMatch: {
-              "endereco.municipio.descricao": new RegExp(raw, "i"),
+              "endereco.municipio.descricao": new RegExp(
+                reEscape(raw),
+                "i"
+              ),
             },
           },
         });
       }
     }
 
-    // Capital social
+    // ===== Capital social =====
     const cap = parseCapitalSocial(p.capitalSocial) || {};
     if (Object.keys(cap).length) and.push(cap);
 
@@ -268,14 +325,48 @@ function timingHeader(_req, res, next) {
       : filter;
 
     try {
-      const docs = await Empresa.find(finalFilter)
-        .sort(sortSpec)
-        .limit(limit + 1)
-        .read(READ_PREFERENCE)
-        .collation({ locale: "pt", strength: 1 })
-        .lean()
-        .maxTimeMS(MAX_TIME_MS_PRIMARY)
-        .exec();
+      async function runFind() {
+        try {
+          // tentativa rápida
+          return await Empresa.find(finalFilter)
+            .sort(sortSpec)
+            .limit(limit + 1)
+            .read(READ_PREFERENCE)
+            .lean()
+            .maxTimeMS(MAX_TIME_MS_PRIMARY)
+            .exec();
+        } catch (e) {
+          if (e.code === 50) {
+            console.warn(
+              "[/api/empresas] MaxTimeMSExpired, retry com secondaryPreferred..."
+            );
+            return await Empresa.find(finalFilter)
+              .sort(sortSpec)
+              .limit(limit + 1)
+              .read("secondaryPreferred")
+              .lean()
+              .maxTimeMS(MAX_TIME_MS_RETRY)
+              .exec();
+          }
+          throw e;
+        }
+      }
+
+      // countDocuments com o filtro base (sem cursor) + dados da página
+      const [docs, total] = await Promise.all([
+        runFind(),
+        Empresa.countDocuments(filter)
+          .read(READ_PREFERENCE)
+          .maxTimeMS(MAX_TIME_MS_RETRY)
+          .exec()
+          .catch((err) => {
+            console.warn(
+              "[/api/empresas] countDocuments falhou:",
+              err.message
+            );
+            return undefined;
+          }),
+      ]);
 
       const hasNextPage = docs.length > limit;
       const items = hasNextPage ? docs.slice(0, limit) : docs;
@@ -283,152 +374,446 @@ function timingHeader(_req, res, next) {
         ? encodeCursor(items[items.length - 1])
         : null;
 
-      // ✅ Inclui o total esperado pelo front-end
       res.json({
         items,
-        total: items.length,
+        total: total ?? items.length,
         pageInfo: { hasNextPage, nextCursor },
       });
     } catch (e) {
       console.error("[/api/empresas] erro:", e);
       res.status(500).json({ error: "Erro ao buscar", detail: e.message });
     }
-
   });
 
-
-  // ======= EXPORTAÇÃO CSV (versão enxuta e otimizada) =======
-  // ======= EXPORTAÇÃO CSV (com Natureza Jurídica incluída) =======
-app.get("/api/empresas.csv", timingHeader, async (req, res) => {
-  let p;
-  try {
-    p = SearchSchema.parse(req.query);
-  } catch (e) {
-    return res
-      .status(400)
-      .json({ error: "Parâmetros inválidos", detail: e.message });
-  }
-
-  const and = [];
-  const or = [];
-
-  // === Filtros principais (iguais à listagem) ===
-  if (p.nome) or.push({ razaoSocial: like(p.nome) });
-  if (p.nomeFantasia) or.push({ "estabelecimentos.nomeFantasia": like(p.nomeFantasia) });
-  if (p.cnpj) or.push({ "estabelecimentos.cnpj": like(p.cnpj) });
-  if (p.email) or.push({ "estabelecimentos.contatos.email": like(p.email) });
-
-  if (p.cnaePrincipal) {
-    const rx = like(p.cnaePrincipal);
-    or.push(
-      { "estabelecimentos.cnaeFiscalPrincipal.codigo": rx },
-      { "estabelecimentos.cnaeFiscalPrincipal.descricao": rx }
-    );
-  }
-
-  if (p.localizacao) {
-    or.push(
-      likeField("estabelecimentos.endereco.uf", p.localizacao),
-      likeField("estabelecimentos.endereco.municipio.descricao", p.localizacao),
-      likeField("estabelecimentos.endereco.cep", p.localizacao)
-    );
-  }
-
-  if (p.situacao) {
-    const sit = p.situacao.toUpperCase();
-    if (sit === "ATIVA") {
-      or.push({ "estabelecimentos.situacaoCadastral": like("04") });
-    } else if (sit === "INATIVA") {
-      or.push({
-        "estabelecimentos.situacaoCadastral": {
-          $in: INATIVA_CODES.map((c) => like(c)),
-        },
-      });
-    } else {
-      or.push({ "estabelecimentos.situacaoCadastral": like(sit) });
-    }
-  }
-
-  if (or.length) and.push({ $or: or });
-  const filter = and.length ? { $and: and } : {};
-
-  try {
-    const filename = `empresas_${new Date()
-      .toISOString()
-      .slice(0, 19)
-      .replace(/[:T]/g, "-")}.csv`;
-
-    res.setHeader("Content-Type", "text/csv; charset=utf-8");
-    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-    res.setHeader("Cache-Control", "no-cache");
-    res.write("\uFEFF"); // BOM UTF-8 p/ Excel
-
-    // Cabeçalho do CSV
-    const header = [
-      "CNPJ",
-      "RazaoSocial",
-      "NomeFantasia",
-      "Email",
-      "CidadeUF",
-      "CNAE",
-      "Telefone",
-      "Porte",
-      "NaturezaJuridica"
-    ];
-    res.write(header.join(",") + "\r\n");
-
-    // Função utilitária p/ escapar strings CSV
-    const csvEscape = (val) => {
-      if (val === null || val === undefined) return "";
-      let s = String(val).replace(/"/g, '""');
-      return `"${s}"`;
-    };
-
-    // Cursor (stream eficiente)
-    const cursor = Empresa.find(filter)
-      .sort({ _id: -1 })
-      .read(READ_PREFERENCE)
-      .lean()
-      .cursor({ batchSize: 500 });
-
-    for await (const doc of cursor) {
-      const est = doc.estabelecimentos?.[0] || {};
-      const endereco = est.endereco || {};
-      const contatos = est.contatos || {};
-
-      const cidadeUf = [
-        endereco.municipio?.descricao || "",
-        endereco.uf || ""
-      ]
-        .filter(Boolean)
-        .join(" - ");
-
-      const line = [
-        csvEscape(est.cnpj || ""),
-        csvEscape(doc.razaoSocial || ""),
-        csvEscape(est.nomeFantasia || ""),
-        csvEscape(contatos.email || ""),
-        csvEscape(cidadeUf),
-        csvEscape(est.cnaeFiscalPrincipal?.codigo || ""),
-        csvEscape(contatos.telefone1 || contatos.telefone2 || ""),
-        csvEscape(doc.porte?.descricao || ""),
-        csvEscape(doc.natureza?.descricao || "")
-      ].join(",");
-
-      res.write(line + "\r\n");
-    }
-
-    res.end();
-  } catch (e) {
-    console.error("[empresas.csv] erro:", e);
-    if (!res.headersSent)
+  // ======= EXPORTAÇÃO CSV (opcional, mantém compat) =======
+  app.get("/api/empresas.csv", timingHeader, async (req, res) => {
+    let p;
+    try {
+      p = SearchSchema.parse(req.query);
+    } catch (e) {
       return res
-        .status(500)
-        .json({ error: "Erro ao exportar CSV", detail: e.message });
-    else res.end();
-  }
-});
+        .status(400)
+        .json({ error: "Parâmetros inválidos", detail: e.message });
+    }
 
+    const and = [];
+    const or = [];
+
+    if (p.nome) {
+      or.push({ razaoSocial: like(p.nome) });
+    }
+
+    if (p.nomeFantasia) {
+      or.push({ "estabelecimentos.nomeFantasia": like(p.nomeFantasia) });
+    }
+
+    if (p.cnpj) {
+      const cnpjDigits = p.cnpj.replace(/\D/g, "");
+      if (cnpjDigits.length === 14) {
+        or.push({ "estabelecimentos.cnpj": cnpjDigits });
+      } else if (cnpjDigits.length > 0) {
+        or.push({
+          "estabelecimentos.cnpj": new RegExp(reEscape(cnpjDigits)),
+        });
+      }
+    }
+
+    if (p.email) {
+      const rx = like(p.email);
+      or.push(
+        { "estabelecimentos.email": rx },
+        { "estabelecimentos.contatos.email": rx }
+      );
+    }
+
+    if (p.cnaePrincipal) {
+      const rawCnae = p.cnaePrincipal.trim();
+      const digits = rawCnae.replace(/\D/g, "");
+      const rx = like(rawCnae);
+
+      if (digits.length >= 4) {
+        or.push({ "estabelecimentos.cnaeFiscalPrincipalCodigo": digits });
+      }
+
+      or.push(
+        { "estabelecimentos.cnaeFiscalPrincipal.codigo": rx },
+        { "estabelecimentos.cnaeFiscalPrincipal.descricao": rx }
+      );
+    }
+
+    if (p.localizacao) {
+      const raw = p.localizacao.trim();
+      const hasDash = raw.includes("-");
+      const isUf = /^[A-Za-z]{2}$/.test(raw);
+      const isCep = /^\d{5}-?\d{3}$/.test(raw);
+
+      if (hasDash) {
+        const [cidade, uf] = raw.split("-").map((s) => s.trim());
+        and.push({
+          estabelecimentos: {
+            $elemMatch: {
+              "endereco.municipio.descricao": new RegExp(
+                reEscape(cidade),
+                "i"
+              ),
+              "endereco.uf": uf.toUpperCase(),
+            },
+          },
+        });
+      } else if (isUf) {
+        and.push({
+          estabelecimentos: {
+            $elemMatch: {
+              "endereco.uf": raw.toUpperCase(),
+            },
+          },
+        });
+      } else if (isCep) {
+        const cepDigits = raw.replace(/\D/g, "");
+        and.push({
+          estabelecimentos: {
+            $elemMatch: {
+              "endereco.cep": cepDigits,
+            },
+          },
+        });
+      } else {
+        and.push({
+          estabelecimentos: {
+            $elemMatch: {
+              "endereco.municipio.descricao": new RegExp(
+                reEscape(raw),
+                "i"
+              ),
+            },
+          },
+        });
+      }
+    }
+
+    if (p.situacao) {
+      const sit = p.situacao.toUpperCase();
+      if (sit === "ATIVA") {
+        or.push({ "estabelecimentos.situacaoCadastral": "02" });
+      } else if (sit === "INATIVA") {
+        or.push({
+          "estabelecimentos.situacaoCadastral": {
+            $in: INATIVA_CODES,
+          },
+        });
+      } else {
+        or.push({ "estabelecimentos.situacaoCadastral": like(sit) });
+      }
+    }
+
+    if (or.length) and.push({ $or: or });
+    const filter = and.length ? { $and: and } : {};
+
+    try {
+      const filename = `empresas_${new Date()
+        .toISOString()
+        .slice(0, 19)
+        .replace(/[:T]/g, "-")}.csv`;
+
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${filename}"`
+      );
+      res.setHeader("Cache-Control", "no-cache");
+      res.write("\uFEFF"); // BOM UTF-8 p/ Excel
+
+      const header = [
+        "CNPJ",
+        "RazaoSocial",
+        "NomeFantasia",
+        "Email",
+        "CidadeUF",
+        "CNAE",
+        "Telefone",
+        "Porte",
+        "NaturezaJuridica",
+      ];
+      res.write(header.join(",") + "\r\n");
+
+      const csvEscape = (val) => {
+        if (val === null || val === undefined) return "";
+        let s = String(val).replace(/"/g, '""');
+        return `"${s}"`;
+      };
+
+      const cursor = Empresa.find(filter)
+        .sort({ _id: -1 })
+        .read(READ_PREFERENCE)
+        .lean()
+        .cursor({ batchSize: 500 });
+
+      for await (const doc of cursor) {
+        const est = doc.estabelecimentos?.[0] || {};
+        const endereco = est.endereco || {};
+        const contatos = est.contatos || {};
+        const email = est.email || contatos.email || "";
+
+        const cidadeUf = [
+          endereco.municipio?.descricao || "",
+          endereco.uf || "",
+        ]
+          .filter(Boolean)
+          .join(" - ");
+
+        const telefone =
+          (Array.isArray(est.telefones) && est.telefones[0]) ||
+          contatos.telefone1 ||
+          contatos.telefone2 ||
+          "";
+
+        const line = [
+          csvEscape(est.cnpj || ""),
+          csvEscape(doc.razaoSocial || ""),
+          csvEscape(est.nomeFantasia || ""),
+          csvEscape(email),
+          csvEscape(cidadeUf),
+          csvEscape(
+            est.cnaeFiscalPrincipal?.codigo || est.cnaeFiscalPrincipalCodigo || ""
+          ),
+          csvEscape(telefone),
+          csvEscape(est.porte?.codigo || doc.porte?.codigo || ""),
+          csvEscape(doc.natureza?.descricao || ""),
+        ].join(",");
+
+        res.write(line + "\r\n");
+      }
+
+      res.end();
+    } catch (e) {
+      console.error("[empresas.csv] erro:", e);
+      if (!res.headersSent)
+        return res
+          .status(500)
+          .json({ error: "Erro ao exportar CSV", detail: e.message });
+      else res.end();
+    }
+  });
+
+  // ======= EXPORTAÇÃO XLSX (principal) =======
+  app.get(
+    ["/api/empresas.xlsx", "/api/empresas/export", "/empresas/export"],
+    timingHeader,
+    async (req, res) => {
+      let p;
+      try {
+        p = SearchSchema.parse(req.query);
+      } catch (e) {
+        return res
+          .status(400)
+          .json({ error: "Parâmetros inválidos", detail: e.message });
+      }
+
+      const and = [];
+      const or = [];
+
+      if (p.nome) {
+        or.push({ razaoSocial: like(p.nome) });
+      }
+
+      if (p.nomeFantasia) {
+        or.push({ "estabelecimentos.nomeFantasia": like(p.nomeFantasia) });
+      }
+
+      if (p.cnpj) {
+        const cnpjDigits = p.cnpj.replace(/\D/g, "");
+        if (cnpjDigits.length === 14) {
+          or.push({ "estabelecimentos.cnpj": cnpjDigits });
+        } else if (cnpjDigits.length > 0) {
+          or.push({
+            "estabelecimentos.cnpj": new RegExp(reEscape(cnpjDigits)),
+          });
+        }
+      }
+
+      if (p.email) {
+        const rx = like(p.email);
+        or.push(
+          { "estabelecimentos.email": rx },
+          { "estabelecimentos.contatos.email": rx }
+        );
+      }
+
+      if (p.cnaePrincipal) {
+        const rawCnae = p.cnaePrincipal.trim();
+        const digits = rawCnae.replace(/\D/g, "");
+        const rx = like(rawCnae);
+
+        if (digits.length >= 4) {
+          or.push({ "estabelecimentos.cnaeFiscalPrincipalCodigo": digits });
+        }
+
+        or.push(
+          { "estabelecimentos.cnaeFiscalPrincipal.codigo": rx },
+          { "estabelecimentos.cnaeFiscalPrincipal.descricao": rx }
+        );
+      }
+
+      if (p.localizacao) {
+        const raw = p.localizacao.trim();
+        const hasDash = raw.includes("-");
+        const isUf = /^[A-Za-z]{2}$/.test(raw);
+        const isCep = /^\d{5}-?\d{3}$/.test(raw);
+
+        if (hasDash) {
+          const [cidade, uf] = raw.split("-").map((s) => s.trim());
+          and.push({
+            estabelecimentos: {
+              $elemMatch: {
+                "endereco.municipio.descricao": new RegExp(
+                  reEscape(cidade),
+                  "i"
+                ),
+                "endereco.uf": uf.toUpperCase(),
+              },
+            },
+          });
+        } else if (isUf) {
+          and.push({
+            estabelecimentos: {
+              $elemMatch: {
+                "endereco.uf": raw.toUpperCase(),
+              },
+            },
+          });
+        } else if (isCep) {
+          const cepDigits = raw.replace(/\D/g, "");
+          and.push({
+            estabelecimentos: {
+              $elemMatch: {
+                "endereco.cep": cepDigits,
+              },
+            },
+          });
+        } else {
+          and.push({
+            estabelecimentos: {
+              $elemMatch: {
+                "endereco.municipio.descricao": new RegExp(
+                  reEscape(raw),
+                  "i"
+                ),
+              },
+            },
+          });
+        }
+      }
+
+      if (p.situacao) {
+        const sit = p.situacao.toUpperCase();
+        if (sit === "ATIVA") {
+          or.push({ "estabelecimentos.situacaoCadastral": "02" });
+        } else if (sit === "INATIVA") {
+          or.push({
+            "estabelecimentos.situacaoCadastral": {
+              $in: INATIVA_CODES,
+            },
+          });
+        } else {
+          or.push({ "estabelecimentos.situacaoCadastral": like(sit) });
+        }
+      }
+
+      // ===== Porte =====
+      if (p.porte) {
+        const porteFilter = buildPorteFilter(p.porte);
+        if (porteFilter) {
+          or.push(porteFilter);
+        }
+      }
+
+      if (or.length) and.push({ $or: or });
+      const filter = and.length ? { $and: and } : {};
+
+      try {
+        const filename = `empresas_${new Date()
+          .toISOString()
+          .slice(0, 19)
+          .replace(/[:T]/g, "-")}.xlsx`;
+
+        const workbook = new ExcelJS.Workbook();
+        const sheet = workbook.addWorksheet("Empresas");
+
+        const header = [
+          "CNPJ",
+          "RazaoSocial",
+          "NomeFantasia",
+          "Email",
+          "CidadeUF",
+          "CNAE",
+          "Telefone",
+          "Porte",
+          "NaturezaJuridica",
+        ];
+        sheet.addRow(header);
+
+        const cursor = Empresa.find(filter)
+          .sort({ _id: -1 })
+          .read(READ_PREFERENCE)
+          .lean()
+          .cursor({ batchSize: 500 });
+
+        for await (const doc of cursor) {
+          const est = doc.estabelecimentos?.[0] || {};
+          const endereco = est.endereco || {};
+          const contatos = est.contatos || {};
+          const email = est.email || contatos.email || "";
+
+          const cidadeUf = [
+            endereco.municipio?.descricao || "",
+            endereco.uf || "",
+          ]
+            .filter(Boolean)
+            .join(" - ");
+
+          const telefone =
+            (Array.isArray(est.telefones) && est.telefones[0]) ||
+            contatos.telefone1 ||
+            contatos.telefone2 ||
+            "";
+
+          sheet.addRow([
+            est.cnpj || "",
+            doc.razaoSocial || "",
+            est.nomeFantasia || "",
+            email || "",
+            cidadeUf || "",
+            est.cnaeFiscalPrincipal?.codigo ||
+            est.cnaeFiscalPrincipalCodigo ||
+            "",
+            telefone || "",
+            est.porte?.descricao || doc.porte?.descricao || "Desconhecido",
+            doc.natureza?.descricao || "",
+          ]);
+        }
+
+        res.setHeader(
+          "Content-Type",
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        );
+        res.setHeader(
+          "Content-Disposition",
+          `attachment; filename="${filename}"`
+        );
+        res.setHeader("Cache-Control", "no-cache");
+
+        await workbook.xlsx.write(res);
+        res.end();
+      } catch (e) {
+        console.error("[empresas.xlsx] erro:", e);
+        if (!res.headersSent)
+          return res
+            .status(500)
+            .json({ error: "Erro ao exportar XLSX", detail: e.message });
+        else res.end();
+      }
+    }
+  );
 
 
 
@@ -438,39 +823,50 @@ app.get("/api/empresas.csv", timingHeader, async (req, res) => {
   }
 
   app.get("/suggest/porte", async (req, res) => {
-    const q = (req.query.q || "").trim();
-    const match = q ? new RegExp(reEscapeLocal(q), "i") : null;
-    try {
-      const filter = match
-        ? { $or: [{ "porte.codigo": match }, { "porte.descricao": match }] }
-        : {};
-      const results = await Empresa.aggregate([
-        { $match: filter },
-        {
-          $group: {
-            _id: { codigo: "$porte.codigo", descricao: "$porte.descricao" },
-          },
-        },
-        {
-          $project: {
-            _id: 0,
-            codigo: "$_id.codigo",
-            descricao: "$_id.descricao",
-          },
-        },
-        { $limit: 20 },
-      ]);
-      res.json(
-        results.map((r) => ({
-          value: r.codigo,
-          label: `${r.codigo} - ${r.descricao}`,
+    const raw = (req.query.q ?? "").toString();
+    const q = raw.trim().toUpperCase();
+
+    // Tabela fixa de portes (codigos normalizados)
+    const base = [
+      { codigo: "1", descricao: "NÃO INFORMADO" },
+      { codigo: "2", descricao: "MICRO EMPRESA" },
+      { codigo: "3", descricao: "EMPRESA DE PEQUENO PORTE" },
+      { codigo: "5", descricao: "DEMAIS" },
+    ];
+
+    // Se não tiver termo nenhum, devolve tudo
+    if (!q) {
+      return res.json(
+        base.map((p) => ({
+          value: p.codigo,
+          label: `${p.codigo} - ${p.descricao}`,
         }))
       );
-    } catch (e) {
-      console.error("[suggest/porte] erro:", e);
-      res.status(500).json([]);
     }
+
+    const qSemEspaco = q.replace(/\s+/g, "");
+
+    const filtered = base.filter((p) => {
+      const cod = String(p.codigo).toUpperCase();
+      const desc = String(p.descricao).toUpperCase();
+      const descSemEspaco = desc.replace(/\s+/g, "");
+
+      return (
+        cod.startsWith(q) ||                 // "1", "2", "3", "5"
+        desc.includes(q) ||                  // "MICRO EMPRESA" contém "MICRO" ou "MI"
+        descSemEspaco.includes(qSemEspaco)   // cobre casos tipo "MICROEMPRESA"
+      );
+    });
+
+    return res.json(
+      filtered.map((p) => ({
+        value: p.codigo,
+        label: `${p.codigo} - ${p.descricao}`,
+      }))
+    );
   });
+
+
 
   app.get("/suggest/natureza", async (req, res) => {
     const q = (req.query.q || "").trim();
@@ -558,7 +954,7 @@ app.get("/api/empresas.csv", timingHeader, async (req, res) => {
     }
   });
 
-  app.get("/suggest/uf", async (req, res) => {
+  app.get("/suggest/uf", async (_req, res) => {
     try {
       const results = await Empresa.aggregate([
         { $group: { _id: "$estabelecimentos.endereco.uf" } },
@@ -566,7 +962,9 @@ app.get("/api/empresas.csv", timingHeader, async (req, res) => {
         { $limit: 30 },
       ]);
       res.json(
-        results.filter((r) => r.uf).map((r) => ({ value: r.uf, label: r.uf }))
+        results
+          .filter((r) => r.uf)
+          .map((r) => ({ value: r.uf, label: r.uf }))
       );
     } catch (e) {
       console.error("[suggest/uf] erro:", e);
@@ -609,6 +1007,29 @@ app.get("/api/empresas.csv", timingHeader, async (req, res) => {
     }
   });
 
+  // (opcional) sugestão por nome da empresa -> usado pelo suggestNome no front
+  app.get("/suggest/nome", async (req, res) => {
+    const q = (req.query.q || "").trim();
+    const match = q ? new RegExp(reEscapeLocal(q), "i") : null;
+
+    try {
+      const cond = match ? { razaoSocial: match } : {};
+      const results = await Empresa.aggregate([
+        { $match: cond },
+        { $project: { _id: 0, nome: "$razaoSocial" } },
+        { $limit: 30 },
+      ]);
+      res.json(
+        results.map((r) => ({
+          nome: r.nome,
+        }))
+      );
+    } catch (e) {
+      console.error("[suggest/nome] erro:", e);
+      res.status(500).json([]);
+    }
+  });
+
   // ======= DETALHE =======
   app.get("/api/empresas/:cnpj", timingHeader, async (req, res) => {
     const cnpj = (req.params.cnpj || "").replace(/\D/g, "");
@@ -616,7 +1037,7 @@ app.get("/api/empresas.csv", timingHeader, async (req, res) => {
       return res.status(400).json({ error: "CNPJ inválido" });
 
     try {
-      const doc = await Empresa.findOne({ cnpj })
+      const doc = await Empresa.findOne({ "estabelecimentos.cnpj": cnpj })
         .read(READ_PREFERENCE)
         .lean()
         .maxTimeMS(2000)

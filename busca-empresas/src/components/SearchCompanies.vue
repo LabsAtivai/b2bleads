@@ -3,6 +3,7 @@ import { ref, onMounted } from "vue";
 import Typeahead from "@/components/Typeahead.vue";
 import { findAllEmpresas, toApiParams } from "@/services/empresas.service";
 import { suggestPorte, suggestNatureza, suggestCnae } from "@/services/suggest.service";
+import { get } from "@/api"; // ✅ import aqui em cima
 
 const rows = ref([]);
 const total = ref(0);
@@ -32,18 +33,23 @@ const fetchData = async (cursor = null) => {
 
     rows.value = items.map((doc) => {
       const est = doc.estabelecimentos?.[0] || {};
+      const endereco = est.endereco || {};
       return {
         cnpj: est.cnpj || "",
         razaoSocial: doc.razaoSocial || "",
         nomeFantasia: est.nomeFantasia || "",
-        localidade: `${est.endereco?.municipio?.descricao || ""} - ${est.endereco?.uf || ""}`,
-        cnaeCodigo: est.cnaeFiscalPrincipal?.codigo || "",
+        localidade: `${endereco?.municipio?.descricao || ""} - ${endereco?.uf || ""}`,
+        cnaeCodigo:
+          est.cnaeFiscalPrincipal?.codigo ||
+          est.cnaeFiscalPrincipalCodigo ||
+          "",
         porte: doc.porte?.descricao || doc.porte?.codigo || "",
         status: est.situacaoCadastral || "",
       };
     });
 
-    total.value = tt || rows.value.length;
+    // ✅ total vindo do backend (countDocuments)
+    total.value = typeof tt === "number" ? tt : rows.value.length;
     nextCursor.value = pageInfo?.nextCursor || null;
   } catch (e) {
     console.error("Erro ao buscar empresas:", e);
@@ -53,6 +59,7 @@ const fetchData = async (cursor = null) => {
 };
 
 const fetchNow = () => fetchData();
+
 const limpar = () => {
   Object.assign(form.value, {
     nome: "",
@@ -72,24 +79,36 @@ const proximaPagina = () => {
   if (nextCursor.value) fetchData(nextCursor.value);
 };
 
-// Exportar CSV
-function baixarCsv() {
-  const params = toApiParams(form.value);
-  params.fields = "cnpj,razaoSocial,nomeFantasia,localidade,cnaeCodigo,porte,status";
+// ===== Exportar XLSX com filtros atuais =====
+async function baixarXlsx() {
+  try {
+    loading.value = true;
 
-  const usp = new URLSearchParams();
-  Object.entries(params).forEach(([k, v]) => {
-    if (v !== undefined && v !== null && String(v).trim() !== "") usp.append(k, v);
-  });
+    const params = toApiParams(form.value);
+    const http = await get();
 
-  const url = `http://localhost:3001/api/empresas.csv?${usp.toString()}`;
+    const response = await http.get("/empresas/export", {
+      responseType: "blob",
+      params,
+    });
 
-  const a = document.createElement("a");
-  a.href = url;
-  a.setAttribute("download", "empresas.csv");
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
+    const blob = new Blob([response.data], {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    });
+    const url = window.URL.createObjectURL(blob);
+
+    const link = document.createElement("a");
+    link.href = url;
+    link.setAttribute("download", "empresas.xlsx");
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(url);
+  } catch (e) {
+    console.error("Erro ao exportar XLSX:", e);
+  } finally {
+    loading.value = false;
+  }
 }
 
 onMounted(fetchNow);
@@ -103,10 +122,27 @@ onMounted(fetchNow);
         <input v-model="form.nome" placeholder="Razão Social" class="input" />
         <input v-model="form.nomeFantasia" placeholder="Nome Fantasia" class="input" />
         <input v-model="form.cnpj" placeholder="CNPJ" class="input" />
-        <Typeahead v-model="form.cnaePrincipal" :fetcher="suggestCnae" label="CNAE Principal" show-value />
-        <Typeahead v-model="form.porte" :fetcher="suggestPorte" label="Porte" />
-        <input v-model="form.localizacao" placeholder="Cidade - UF ou apenas UF" class="input" />
-        <Typeahead v-model="form.naturezaJuridica" :fetcher="suggestNatureza" label="Natureza Jurídica" />
+        <Typeahead
+          v-model="form.cnaePrincipal"
+          :fetcher="suggestCnae"
+          label="CNAE Principal"
+          show-value
+        />
+        <Typeahead
+          v-model="form.porte"
+          :fetcher="suggestPorte"
+          label="Porte"
+        />
+        <input
+          v-model="form.localizacao"
+          placeholder="Cidade - UF ou apenas UF"
+          class="input"
+        />
+        <Typeahead
+          v-model="form.naturezaJuridica"
+          :fetcher="suggestNatureza"
+          label="Natureza Jurídica"
+        />
         <select v-model="form.situacao" class="select">
           <option value="">Todas</option>
           <option value="ATIVA">Ativa</option>
@@ -121,12 +157,31 @@ onMounted(fetchNow);
           Incluir CNAEs Secundários
         </label>
 
-        <button class="btn btn-primary" @click="fetchNow" :disabled="loading">Buscar</button>
-        <button class="btn btn-ghost" @click="limpar" :disabled="loading">Limpar</button>
-        <button class="btn btn-outline" @click="proximaPagina" :disabled="!nextCursor || loading">Próxima Página</button>
-        <button class="btn btn-outline" @click="baixarCsv" :disabled="loading">Exportar CSV</button>
+        <button class="btn btn-primary" @click="fetchNow" :disabled="loading">
+          Buscar
+        </button>
+        <button class="btn btn-ghost" @click="limpar" :disabled="loading">
+          Limpar
+        </button>
+        <button
+          class="btn btn-outline"
+          @click="proximaPagina"
+          :disabled="!nextCursor || loading"
+        >
+          Próxima Página
+        </button>
+        <!-- ✅ agora chama baixarXlsx -->
+        <button
+          class="btn btn-outline"
+          @click="baixarXlsx"
+          :disabled="loading"
+        >
+          Exportar XLSX
+        </button>
 
-        <span v-if="!loading" class="ml-4 text-sm text-slate-600">Total: {{ total }}</span>
+        <span v-if="!loading" class="ml-4 text-sm text-slate-600">
+          Total: {{ total }}
+        </span>
         <span v-else class="ml-4 text-sm text-slate-500">Carregando…</span>
       </div>
     </div>

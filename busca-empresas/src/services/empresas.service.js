@@ -46,11 +46,13 @@ export async function findEmpresaByCnpj(cnpj) {
   return data
 }
 
+
 // src/services/empresas.service.js
 export function toApiParams(form = {}) {
   return compact({
     nome: form.nome,
     nomeFantasia: form.nomeFantasia,
+    cnpj: form.cnpj,                    // ✅ AGORA VAI PRO BACKEND
     cnaePrincipal: form.cnaePrincipal,
     buscarCnaeSecundario: form.buscarCnaeSecundario ? '1' : undefined,
     localizacao: form.localizacao,
@@ -59,13 +61,11 @@ export function toApiParams(form = {}) {
     naturezaJuridica: form.naturezaJuridica,
     porte: form.porte,
     capitalSocial: form.capitalSocial,
-    opcaoMei: form.opcaoMei,
-    opcaoSimples: form.opcaoSimples,
     pageSize: form.pageSize,
     cursor: form.cursor,
-    detalhe: form.detalhe ? '1' : '0',
   })
 }
+
 
 
 export async function exportEmpresasCsv() {

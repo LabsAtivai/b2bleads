@@ -9,8 +9,9 @@
   },
   "dependencies": {
     "cors": "^2.8.5",
-    "csv-parse": "^6.1.0",
+   "csv-parse": "^5.5.6",
     "dotenv": "^16.6.1",
+    "exceljs": "^4.4.0",
     "express": "^4.19.2",
     "json2csv": "^6.0.0-alpha.2",
     "mongodb": "^6.20.0",

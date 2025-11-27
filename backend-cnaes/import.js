@@ -15,11 +15,9 @@ const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017';
 const DB_NAME = process.env.DB_NAME || 'cnpj';
 const ROOT = path.resolve(process.env.DATA_ROOT || './dados_cnpj');
 
-const BASE_URL =
-  process.env.RFB_BASE_URL ||
-  'https://arquivos.receitafederal.gov.br/dados/cnpj/dados_abertos_cnpj';
+// Pasta onde você já tem todos os .zip baixados da Receita Federal
+const LOCAL_ZIPS_DIR = path.resolve(process.env.LOCAL_ZIPS_DIR || './zips_cnpj');
 
-const CONCURRENCY_DOWNLOAD = Number(process.env.CONCURRENCY_DOWNLOAD || 4);
 const SOCKET_TIMEOUT_MS = Number(process.env.SOCKET_TIMEOUT_MS || 600000);
 
 /* Dirs padronizados para destino dos CSVs */
@@ -124,14 +122,8 @@ const pLimit = (concurrency) => {
   const run = (fn, resolve, reject) => {
     active++;
     Promise.resolve(fn())
-      .then((v) => {
-        resolve(v);
-        next();
-      })
-      .catch((e) => {
-        reject(e);
-        next();
-      });
+      .then((v) => { resolve(v); next(); })
+      .catch((e) => { reject(e); next(); });
   };
   return (fn) =>
     new Promise((res, rej) => {
@@ -140,18 +132,55 @@ const pLimit = (concurrency) => {
     });
 };
 
-/* --------------- Downloader --------------- */
+/* =============== EXTRAÇÃO LOCAL DOS ZIPS =============== */
+async function extractAllLocalZips() {
+  if (!fs.existsSync(LOCAL_ZIPS_DIR)) {
+    throw new Error(`Pasta com ZIPs não encontrada: ${LOCAL_ZIPS_DIR}\nDefina LOCAL_ZIPS_DIR no .env ou coloque os arquivos lá.`);
+  }
 
-/** baixa um URL para um arquivo local */
-async function downloadToFile(url, outFile) {
-  const res = await fetch(url, { redirect: 'follow' });
-  if (!res.ok) throw new Error(`HTTP ${res.status} ao baixar ${url}`);
-  await fs.promises.mkdir(path.dirname(outFile), { recursive: true });
-  const fileStream = fs.createWriteStream(outFile);
-  await pipeline(res.body, fileStream);
+  const zipFiles = fs.readdirSync(LOCAL_ZIPS_DIR)
+    .filter(f => /\.zip$/i.test(f))
+    .map(f => path.join(LOCAL_ZIPS_DIR, f));
+
+  if (zipFiles.length === 0) {
+    throw new Error(`Nenhum arquivo .zip encontrado em ${LOCAL_ZIPS_DIR}`);
+  }
+
+  console.log(`Encontrados ${zipFiles.length} arquivos ZIP em ${LOCAL_ZIPS_DIR}`);
+
+  const routeFor = (fileName) => {
+    const f = fileName.toLowerCase();
+    if (f.includes('empresa')) return DIRS.empresas;
+    if (f.includes('estabelec')) return DIRS.estab;
+    if (f.includes('socio')) return DIRS.socios;
+    if (f.includes('simples')) return DIRS.simples;
+    if (f.includes('natureza')) return DIRS.naturezas;
+    if (f.includes('municipio')) return DIRS.municipios;
+    if (f.includes('pais')) return DIRS.paises;
+    if (f.includes('qualificacao')) return DIRS.qualificacoes;
+    if (f.includes('cnae')) return DIRS.cnaes;
+    if (f.includes('motivo')) return DIRS.motivos;
+    return '';
+  };
+
+  const limit = pLimit(4);
+
+  await Promise.all(
+    zipFiles.map(zipPath =>
+      limit(async () => {
+        const fileName = path.basename(zipPath);
+        const destSub = routeFor(fileName);
+        const destDir = destSub ? path.join(ROOT, destSub) : ROOT;
+
+        console.log(`Extraindo: ${fileName} → ${path.relative('.', destDir)}`);
+        await extractZip(zipPath, destDir);
+      })
+    )
+  );
+
+  console.log('Todos os ZIPs locais foram extraídos com sucesso.');
 }
 
-/** extrai ZIP para uma pasta, renomeando qualquer entrada sem extensão para .csv */
 async function extractZip(zipPath, destDir) {
   await fs.promises.mkdir(destDir, { recursive: true });
   const directory = await unzipper.Open.file(zipPath);
@@ -159,10 +188,8 @@ async function extractZip(zipPath, destDir) {
   for (const entry of directory.files) {
     if (entry.type !== 'File') continue;
 
-    // nome normalizado sempre terminando com .csv
     const baseName = path.basename(entry.path).replace(/[/\\]+/g, '');
-    const hasCsv = /\.csv$/i.test(baseName);
-    const outName = hasCsv ? baseName : `${baseName}.csv`;
+    const outName = /\.csv$/i.test(baseName) ? baseName : `${baseName}.csv`;
     const outPath = path.join(destDir, outName);
 
     const readStream = entry.stream();
@@ -171,78 +198,13 @@ async function extractZip(zipPath, destDir) {
   }
 }
 
-/** baixa todos os zips do mês mais recente e extrai para ROOT/<pasta> */
-async function fetchLatestMonthAndExtract() {
-  // 1) pega índice raiz
-  const idxRes = await fetch(`${BASE_URL}/?C=N;O=D`);
-  if (!idxRes.ok) throw new Error(`Falha ao abrir índice raiz (${idxRes.status})`);
-  const idxHtml = await idxRes.text();
-
-  // 2) captura diretórios no formato YYYY-MM/
-  const dirMatches = [...idxHtml.matchAll(/href="(\d{4}-\d{2})\/"/g)].map((m) => m[1]);
-  if (!dirMatches.length) throw new Error('Nenhum diretório YYYY-MM encontrado na RFB');
-  // como já vem ordenado por nome desc, o primeiro tende a ser o mais novo; mas vamos ordenar por data
-  const latest = dirMatches.sort().at(-1);
-  console.log(`> Último mês encontrado: ${latest}`);
-
-  // 3) abre o índice do mês
-  const monRes = await fetch(`${BASE_URL}/${latest}/?C=N;O=D`);
-  if (!monRes.ok) throw new Error(`Falha ao abrir mês ${latest} (${monRes.status})`);
-  const monHtml = await monRes.text();
-
-  // 4) links .zip
-  const zipLinks = [...monHtml.matchAll(/href="([^"]+\.zip)"/gi)].map((m) => m[1]);
-  if (!zipLinks.length) throw new Error('Nenhum .zip encontrado no mês mais recente');
-
-  // 5) Decide a pasta de destino de cada ZIP pelo prefixo do nome
-  const routeFor = (file) => {
-    const f = file.toLowerCase();
-    if (f.startsWith('empresa')) return DIRS.empresas;
-    if (f.startsWith('estabelec')) return DIRS.estab;
-    if (f.startsWith('socio')) return DIRS.socios;
-    if (f.startsWith('simples')) return DIRS.simples;
-    if (f.startsWith('natureza')) return DIRS.naturezas;
-    if (f.startsWith('municipio')) return DIRS.municipios;
-    if (f.startsWith('pais')) return DIRS.paises;
-    if (f.startsWith('qualificacao')) return DIRS.qualificacoes;
-    if (f.startsWith('cnae')) return DIRS.cnaes;
-    if (f.startsWith('motivo')) return DIRS.motivos;
-    // fallback: coloca em raiz
-    return '';
-  };
-
-  // 6) baixa e extrai com concorrência limitada
-  const tmp = path.join(ROOT, '_tmp', latest);
-  await fs.promises.mkdir(tmp, { recursive: true });
-
-  const limit = pLimit(CONCURRENCY_DOWNLOAD);
-  await Promise.all(
-    zipLinks.map((href) =>
-      limit(async () => {
-        const url = `${BASE_URL}/${latest}/${href}`;
-        const localZip = path.join(tmp, href);
-        console.log(`Baixando: ${href}`);
-        await downloadToFile(url, localZip);
-
-        const destSub = routeFor(href);
-        const dest = destSub ? path.join(ROOT, destSub) : ROOT;
-        console.log(`Extraindo: ${href} -> ${dest}`);
-        await extractZip(localZip, dest);
-      })
-    )
-  );
-
-  console.log('✔ Download e extração concluídos.');
-}
-
-/* --------------- CSV Reader Helpers --------------- */
-/* Importante: alguns dumps vêm em ISO-8859-1. Se perceber caracteres estranhos,
-   troque "encoding" para 'latin1' no createReadStream. Mantive 'utf8' por padrão. */
+/* =============== CSV READER HELPERS =============== */
 function listAllFiles(dirAbs) {
   if (!fs.existsSync(dirAbs)) return [];
   return fs.readdirSync(dirAbs).filter((f) => fs.statSync(path.join(dirAbs, f)).isFile());
 }
-function streamCsvRows(fullPath, headers, onRow, { delimiter = ';', bulkFlush = async () => {} } = {}) {
+
+function streamCsvRows(fullPath, headers, onRow, { delimiter = ';', bulkFlush = async () => { } } = {}) {
   return new Promise((resolve, reject) => {
     const readStream = fs.createReadStream(fullPath, { encoding: 'utf8', highWaterMark: 64 * 1024 });
     const parser = parse({ delimiter, columns: headers, relax_column_count: true, bom: true, trim: true });
@@ -262,6 +224,7 @@ function streamCsvRows(fullPath, headers, onRow, { delimiter = ';', bulkFlush = 
     readStream.pipe(parser);
   });
 }
+
 function socioIdHash(row) {
   const key = [
     row['CNPJ BÁSICO'],
@@ -269,25 +232,59 @@ function socioIdHash(row) {
     row['CNPJ/CPF DO SÓCIO'],
     row['NOME DO SÓCIO (NO CASO PF) OU RAZÃO SOCIAL (NO CASO PJ)'],
     row['DATA DE ENTRADA SOCIEDADE'],
-  ]
-    .map((x) => (x ?? '').toString())
-    .join('|');
+  ].map(x => (x ?? '').toString()).join('|');
   return crypto.createHash('sha1').update(key).digest('hex');
 }
 
-/* ============= IMPORTADORES (UPSERT) ============= */
+/* =============== IMPORTADORES =============== */
 async function importDom2(client, collName, subdir) {
   const db = client.db(DB_NAME);
   const col = db.collection(collName);
-  await col.createIndex({ codigo: 1 });
+
+  // Verifica se já tem dados nessa coleção
+  const count = await col.estimatedDocumentCount();
+  if (count > 0) {
+    console.log(`Domínio ${collName} já importado (${count} registros). Pulando...`);
+    return; // PULA TOTALMENTE
+  }
+
+  // Se chegou aqui, é porque a coleção está vazia → cria índice e importa
+  await col.createIndex({ codigo: 1 }, { unique: true, background: true });
 
   const folder = path.join(ROOT, subdir);
   for (const f of listAllFiles(folder)) {
     const full = path.join(folder, f);
     const ops = [];
     const BULK = 1000;
+
     const flush = async () => {
-      if (ops.length) await col.bulkWrite(ops.splice(0), { ordered: false });
+      if (ops.length === 0) return;
+
+      const currentBatch = ops.splice(0);
+
+      for (let tentativa = 1; tentativa <= 15; tentativa++) {
+        try {
+          await col.bulkWrite(currentBatch, { ordered: false });
+          return; // sucesso
+        } catch (err) {
+          if (
+            err.message?.includes('ECONNRESET') ||
+            err.message?.includes('network') ||
+            err.message?.includes('ETIMEDOUT') ||
+            err.codeName === 'NetworkTimeout' ||
+            err.name === 'MongoNetworkError'
+          ) {
+            console.log(`Conexão caiu (tentativa ${tentativa}/15). Reconectando em ${tentativa * 5} segundos...`);
+            await new Promise(r => setTimeout(r, tentativa * 5000));
+          } else {
+            ops.unshift(...currentBatch);
+            throw err;
+          }
+        }
+      }
+
+      ops.unshift(...currentBatch);
+      throw new Error('Falha após 15 tentativas de reconexão');
     };
 
     await streamCsvRows(
@@ -305,12 +302,12 @@ async function importDom2(client, collName, subdir) {
         });
         if (ops.length >= BULK) {
           parser.pause();
-          flush().then(() => parser.resume());
+          flush().then(() => parser.resume()).catch(err => parser.emit('error', err));
         }
       },
       { bulkFlush: flush }
     );
-    console.log(`Domínio ${collName}: ${f} ok`);
+    console.log(`Domínio ${collName}: ${f} importado com sucesso`);
   }
 }
 
@@ -326,7 +323,33 @@ async function importEmpresas(client) {
     const BULK = 1000;
 
     const flush = async () => {
-      if (ops.length) await col.bulkWrite(ops.splice(0), { ordered: false });
+      if (ops.length === 0) return;
+
+      const currentBatch = ops.splice(0);
+
+      for (let tentativa = 1; tentativa <= 15; tentativa++) {
+        try {
+          await col.bulkWrite(currentBatch, { ordered: false });
+          return; // sucesso
+        } catch (err) {
+          if (
+            err.message?.includes('ECONNRESET') ||
+            err.message?.includes('network') ||
+            err.message?.includes('ETIMEDOUT') ||
+            err.codeName === 'NetworkTimeout' ||
+            err.name === 'MongoNetworkError'
+          ) {
+            console.log(`Conexão caiu (tentativa ${tentativa}/15). Reconectando em ${tentativa * 5} segundos...`);
+            await new Promise(r => setTimeout(r, tentativa * 5000));
+          } else {
+            ops.unshift(...currentBatch);
+            throw err;
+          }
+        }
+      }
+
+      ops.unshift(...currentBatch);
+      throw new Error('Falha após 15 tentativas de reconexão');
     };
 
     await streamCsvRows(
@@ -359,7 +382,7 @@ async function importEmpresas(client) {
         if (++count % 20000 === 0) process.stdout.write(`Empresas: ${count}\r`);
         if (ops.length >= BULK) {
           parser.pause();
-          flush().then(() => parser.resume());
+          flush().then(() => parser.resume()).catch(err => parser.emit('error', err));
         }
       },
       { bulkFlush: flush }
@@ -371,9 +394,25 @@ async function importEmpresas(client) {
 async function importEstabelecimentos(client) {
   const db = client.db(DB_NAME);
   const col = db.collection('estabelecimentos');
-  await col.createIndex({ cnpjBasico: 1 });
-  await col.createIndex({ _id: 1 }, { unique: true });
 
+  // 1. Remove índice legado "cnpj_1" que causa E11000 duplicate key
+  try {
+    const indexes = await col.indexes();
+    const hasLegacyCnpjIndex = indexes.some(idx => idx.name === 'cnpj_1');
+    if (hasLegacyCnpjIndex) {
+      await col.dropIndex('cnpj_1');
+      console.log('Índice legado "cnpj_1" removido → E11000 resolvido');
+    }
+  } catch (err) {
+    if (err.codeName !== 'IndexNotFound') {
+      console.warn('Aviso ao tentar remover índice cnpj_1:', err.message);
+    }
+  }
+
+  // 2. Índices úteis
+  await col.createIndex({ cnpjBasico: 1 }, { background: true });
+
+  // 3. Importação
   for (const f of listAllFiles(path.join(ROOT, DIRS.estab))) {
     const full = path.join(ROOT, DIRS.estab, f);
     let count = 0;
@@ -381,8 +420,36 @@ async function importEstabelecimentos(client) {
     const BULK = 1000;
 
     const flush = async () => {
-      if (ops.length) await col.bulkWrite(ops.splice(0), { ordered: false });
+      if (ops.length === 0) return;
+
+      const currentBatch = ops.splice(0);
+
+      for (let tentativa = 1; tentativa <= 15; tentativa++) {
+        try {
+          await col.bulkWrite(currentBatch, { ordered: false });
+          return; // sucesso
+        } catch (err) {
+          if (
+            err.message?.includes('ECONNRESET') ||
+            err.message?.includes('network') ||
+            err.message?.includes('ETIMEDOUT') ||
+            err.codeName === 'NetworkTimeout' ||
+            err.name === 'MongoNetworkError'
+          ) {
+            console.log(`Conexão caiu (tentativa ${tentativa}/15). Reconectando em ${tentativa * 5}s...`);
+            await new Promise(r => setTimeout(r, tentativa * 5000));
+          } else {
+            ops.unshift(...currentBatch);
+            throw err;
+          }
+        }
+      }
+
+      ops.unshift(...currentBatch);
+      throw new Error('Falha após 15 tentativas de reconexão');
     };
+
+    console.log(`Importando estabelecimentos: ${f}`);
 
     await streamCsvRows(
       full,
@@ -390,6 +457,7 @@ async function importEstabelecimentos(client) {
       (row, parser) => {
         const base = ensure8(row['CNPJ BÁSICO']);
         if (!base) return;
+
         const cnpj = joinCnpj(row['CNPJ BÁSICO'], row['CNPJ ORDEM'], row['CNPJ DV']);
 
         const doc = {
@@ -397,22 +465,32 @@ async function importEstabelecimentos(client) {
           cnpj,
           cnpjBasico: base,
           nomeFantasia: clean(row['NOME FANTASIA']) || undefined,
+          situacaoCadastral: clean(row['SITUAÇÃO CADASTRAL']) || undefined,
+          dataSituacaoCadastral: clean(row['DATA SITUAÇÃO CADASTRAL']) || undefined,
           motivoSituacaoCadastralCodigo: clean(row['MOTIVO SITUAÇÃO CADASTRAL']) || undefined,
           paisCodigo: clean(row['PAIS']) || undefined,
+          dataInicioAtividade: clean(row['DATA DE INÍCIO ATIVIDADE']) || undefined,
+          cnaeFiscalPrincipalCodigo: clean(row['CNAE FISCAL PRINCIPAL']) || undefined,
+          cnaesSecundariosCodigos: clean(row['CNAE FISCAL SECUNDÁRIA'])
+            ? clean(row['CNAE FISCAL SECUNDÁRIA']).split(',').map(s => s.trim()).filter(Boolean)
+            : [],
           endereco: {
-            municipioCodigo: clean(row['MUNICÍPIO']) || undefined,
-            uf: clean(row['UF']) || undefined,
-            cep: clean(row['CEP']) || undefined,
-            bairro: clean(row['BAIRRO']) || undefined,
+            tipoLogradouro: clean(row['TIPO DE LOGRADOURO']) || undefined,
             logradouro: clean(row['LOGRADOURO']) || undefined,
             numero: clean(row['NÚMERO']) || undefined,
             complemento: clean(row['COMPLEMENTO']) || undefined,
+            bairro: clean(row['BAIRRO']) || undefined,
+            cep: clean(row['CEP']) || undefined,
+            uf: clean(row['UF']) || undefined,
+            municipioCodigo: clean(row['MUNICÍPIO']) || undefined,
           },
-          cnaeFiscalPrincipalCodigo: clean(row['CNAE FISCAL PRINCIPAL']) || undefined,
-          cnaesSecundariosCodigos: clean(row['CNAE FISCAL SECUNDÁRIA'])
-            .split(',')
-            .map((s) => s.trim())
-            .filter(Boolean),
+          telefones: [
+            clean(row['DDD 1']) && clean(row['TELEFONE 1']) ? `${clean(row['DDD 1'])}${clean(row['TELEFONE 1'])}` : null,
+            clean(row['DDD 2']) && clean(row['TELEFONE 2']) ? `${clean(row['DDD 2'])}${clean(row['TELEFONE 2'])}` : null,
+          ].filter(Boolean),
+          email: clean(row['CORREIO ELETRÔNICO']) || undefined,
+          situacaoEspecial: clean(row['SITUAÇÃO ESPECIAL']) || undefined,
+          dataSituacaoEspecial: clean(row['DATA DA SITUAÇÃO ESPECIAL']) || undefined,
           updatedAt: new Date(),
         };
 
@@ -424,32 +502,74 @@ async function importEstabelecimentos(client) {
           },
         });
 
-        if (++count % 20000 === 0) process.stdout.write(`Estabs: ${count}\r`);
+        if (++count % 25_000 === 0) {
+          process.stdout.write(`  Estabelecimentos processados: ${count.toLocaleString()}   \r`);
+        }
+
         if (ops.length >= BULK) {
           parser.pause();
-          flush().then(() => parser.resume());
+          flush().then(() => parser.resume()).catch(err => parser.emit('error', err));
         }
       },
       { bulkFlush: flush }
     );
-    console.log(`\nEstabelecimentos: arquivo ${f} concluído`);
+
+    await flush();
+
+    console.log(`\nEstabelecimentos: ${f} → ${count.toLocaleString()} registros importados`);
   }
+
+  console.log('Importação de estabelecimentos concluída com sucesso!');
 }
 
 async function importSocios(client) {
   const db = client.db(DB_NAME);
   const col = db.collection('socios');
+  const statusCol = db.collection('import_status'); // controle de arquivos concluídos
+
   await col.createIndex({ cnpjBasico: 1 });
-  await col.createIndex({ _id: 1 }, { unique: true });
 
   for (const f of listAllFiles(path.join(ROOT, DIRS.socios))) {
+    // Verifica se este arquivo já foi concluído em uma execução anterior
+    const already = await statusCol.findOne({ collection: 'socios', file: f, done: true });
+    if (already) {
+      console.log(`Sócios: pulando arquivo ${f}, já importado anteriormente.`);
+      continue;
+    }
+
     const full = path.join(ROOT, DIRS.socios, f);
     let count = 0;
     const ops = [];
     const BULK = 1000;
 
     const flush = async () => {
-      if (ops.length) await col.bulkWrite(ops.splice(0), { ordered: false });
+      if (ops.length === 0) return;
+
+      const currentBatch = ops.splice(0);
+
+      for (let tentativa = 1; tentativa <= 15; tentativa++) {
+        try {
+          await col.bulkWrite(currentBatch, { ordered: false });
+          return; // sucesso
+        } catch (err) {
+          if (
+            err.message?.includes('ECONNRESET') ||
+            err.message?.includes('network') ||
+            err.message?.includes('ETIMEDOUT') ||
+            err.codeName === 'NetworkTimeout' ||
+            err.name === 'MongoNetworkError'
+          ) {
+            console.log(`Conexão caiu (tentativa ${tentativa}/15). Reconectando em ${tentativa * 5} segundos...`);
+            await new Promise(r => setTimeout(r, tentativa * 5000));
+          } else {
+            ops.unshift(...currentBatch);
+            throw err;
+          }
+        }
+      }
+
+      ops.unshift(...currentBatch);
+      throw new Error('Falha após 15 tentativas de reconexão');
     };
 
     await streamCsvRows(
@@ -484,12 +604,28 @@ async function importSocios(client) {
         if (++count % 50000 === 0) process.stdout.write(`Socios: ${count}\r`);
         if (ops.length >= BULK) {
           parser.pause();
-          flush().then(() => parser.resume());
+          flush().then(() => parser.resume()).catch(err => parser.emit('error', err));
         }
       },
       { bulkFlush: flush }
     );
+
+    await flush();
     console.log(`\nSócios: arquivo ${f} concluído`);
+
+    // Marca o arquivo como concluído
+    await statusCol.updateOne(
+      { collection: 'socios', file: f },
+      {
+        $set: {
+          collection: 'socios',
+          file: f,
+          done: true,
+          finishedAt: new Date(),
+        },
+      },
+      { upsert: true }
+    );
   }
 }
 
@@ -504,7 +640,33 @@ async function importSimples(client) {
     const BULK = 1000;
 
     const flush = async () => {
-      if (ops.length) await col.bulkWrite(ops.splice(0), { ordered: false });
+      if (ops.length === 0) return;
+
+      const currentBatch = ops.splice(0);
+
+      for (let tentativa = 1; tentativa <= 15; tentativa++) {
+        try {
+          await col.bulkWrite(currentBatch, { ordered: false });
+          return; // sucesso
+        } catch (err) {
+          if (
+            err.message?.includes('ECONNRESET') ||
+            err.message?.includes('network') ||
+            err.message?.includes('ETIMEDOUT') ||
+            err.codeName === 'NetworkTimeout' ||
+            err.name === 'MongoNetworkError'
+          ) {
+            console.log(`Conexão caiu (tentativa ${tentativa}/15). Reconectando em ${tentativa * 5} segundos...`);
+            await new Promise(r => setTimeout(r, tentativa * 5000));
+          } else {
+            ops.unshift(...currentBatch);
+            throw err;
+          }
+        }
+      }
+
+      ops.unshift(...currentBatch);
+      throw new Error('Falha após 15 tentativas de reconexão');
     };
 
     await streamCsvRows(
@@ -535,187 +697,370 @@ async function importSimples(client) {
 
         if (ops.length >= BULK) {
           parser.pause();
-          flush().then(() => parser.resume());
+          flush().then(() => parser.resume()).catch(err => parser.emit('error', err));
         }
       },
       { bulkFlush: flush }
     );
+    await flush();
     console.log(`Simples: arquivo ${f} concluído`);
   }
 }
 
-/* ================= AGREGADOR ================= */
+/* =============== AGREGAÇÃO FINAL =============== */
 async function buildEmpresasAgg(client) {
+  console.log('> Construindo coleção agregada (empresas_agg) — versão indestrutível ativada');
+
   const db = client.db(DB_NAME);
+  const colAgg = db.collection('empresas_agg');
+
+  // Se já tem mais de 100k documentos, pula (você já fez)
+  if (await colAgg.estimatedDocumentCount() > 100000) {
+    console.log('empresas_agg já existe com muitos documentos → pulando');
+    return;
+  }
+
+  await colAgg.drop().catch(() => {});
+  await colAgg.createIndex({ cnpjBasico: 1 }, { unique: true });
+
+  // Carrega domínios (com retry)
+  const loadMap = async (collName) => {
+    const map = new Map();
+    for (let i = 0; i < 50; i++) {
+      try {
+        for await (const doc of db.collection(collName).find({}, { projection: { codigo: 1, descricao: 1, _id: 0 } })) {
+          if (doc.codigo) map.set(doc.codigo, doc.descricao || '');
+        }
+        return map;
+      } catch (err) {
+        console.log(`Erro ao carregar ${collName}, tentativa ${i + 1}/50...`);
+        await new Promise(r => setTimeout(r, 10000));
+      }
+    }
+    throw new Error(`Falha ao carregar ${collName}`);
+  };
+
+  console.log('Carregando domínios (naturezas, municípios, etc.)...');
+  const [mapNat, mapPais, mapMun, mapQual, mapCnae, mapMot] = await Promise.all([
+    loadMap('naturezas'),
+    loadMap('paises'),
+    loadMap('municipios'),
+    loadMap('qualificacoes'),
+    loadMap('cnaes'),
+    loadMap('motivos'),
+  ]);
+
   const colEmpresas = db.collection('empresas');
   const colEstabs = db.collection('estabelecimentos');
   const colSocios = db.collection('socios');
   const colSimples = db.collection('simples');
 
-  const colNaturezas = db.collection('naturezas');
-  const colPaises = db.collection('paises');
-  const colMunicipios = db.collection('municipios');
-  const colQualif = db.collection('qualificacoes');
-  const colCnaes = db.collection('cnaes');
-  const colMotivos = db.collection('motivos');
-
-  const colAgg = db.collection('empresas_agg');
-  await colAgg.createIndex({ cnpjBasico: 1 }, { unique: true });
-
-  const domToMap = async (col) => {
-    const map = new Map();
-    for await (const d of col.find({}, { projection: { _id: 0 } })) map.set(d.codigo, d.descricao);
-    return map;
-  };
-
-  const [mapNaturezas, mapPaises, mapMunicipios, mapQualif, mapCnaes, mapMotivos] = await Promise.all([
-    domToMap(colNaturezas),
-    domToMap(colPaises),
-    domToMap(colMunicipios),
-    domToMap(colQualif),
-    domToMap(colCnaes),
-    domToMap(colMotivos),
-  ]);
-
-  const BATCH_SIZE = 1000;
-  const CONCURRENCY = 50;
-  const limit = pLimit(CONCURRENCY);
-
-  const empresaProj = {
-    _id: 0,
-    cnpjBasico: 1,
-    razaoSocial: 1,
-    naturezaCodigo: 1,
-    qualificacaoResponsavelCodigo: 1,
-    capitalSocial: 1,
-    porte: 1,
-    enteFederativoResponsavel: 1,
-  };
-
-  const cursor = colEmpresas.find({}, { projection: empresaProj, noCursorTimeout: true });
-
   let processed = 0;
-  let batch = [];
+  const BATCH_SIZE = 500;
 
-  const enrichEstab = (est) => {
-    if (est.motivoSituacaoCadastralCodigo)
-      est.motivoSituacaoCadastral = {
-        codigo: est.motivoSituacaoCadastralCodigo,
-        descricao: mapMotivos.get(est.motivoSituacaoCadastralCodigo),
-      };
-    if (est.paisCodigo) est.pais = { codigo: est.paisCodigo, descricao: mapPaises.get(est.paisCodigo) };
-    if (est.endereco?.municipioCodigo)
-      est.endereco.municipio = {
-        codigo: est.endereco.municipioCodigo,
-        descricao: mapMunicipios.get(est.endereco.municipioCodigo),
-      };
-    if (est.cnaeFiscalPrincipalCodigo)
-      est.cnaeFiscalPrincipal = {
-        codigo: est.cnaeFiscalPrincipalCodigo,
-        descricao: mapCnaes.get(est.cnaeFiscalPrincipalCodigo),
-      };
-    if (Array.isArray(est.cnaesSecundariosCodigos) && est.cnaesSecundariosCodigos.length) {
-      est.cnaesSecundarios = est.cnaesSecundariosCodigos
-        .map((c) => ({ codigo: c, descricao: mapCnaes.get(c) }))
-        .filter((x) => x.codigo);
+  const cursor = colEmpresas.find({}, { 
+    projection: { 
+      cnpjBasico: 1, razaoSocial: 1, naturezaCodigo: 1, 
+      qualificacaoResponsavelCodigo: 1, capitalSocial: 1, 
+      porte: 1, enteFederativoResponsavel: 1 
+    }, 
+    noCursorTimeout: true 
+  }).batchSize(1000);
+
+  const safeFind = async (col, filter) => {
+    for (let i = 0; i < 30; i++) {
+      try {
+        return await col.find(filter).toArray();
+      } catch (err) {
+        console.log(`Erro no find (tentativa ${i + 1}), reconectando...`);
+        await new Promise(r => setTimeout(r, (i + 1) * 5000));
+        client = await getClient(); // força reconexão global
+      }
     }
-    return est;
+    return [];
   };
 
-  const enrichSocio = (s) => {
-    if (s.qualificacaoSocioCodigo)
-      s.qualificacaoSocio = { codigo: s.qualificacaoSocioCodigo, descricao: mapQualif.get(s.qualificacaoSocioCodigo) };
-    if (s.representante?.qualificacaoCodigo)
-      s.representante.qualificacao = {
-        codigo: s.representante.qualificacaoCodigo,
-        descricao: mapQualif.get(s.representante.qualificacaoCodigo),
-      };
-    if (s.paisCodigo) s.pais = { codigo: s.paisCodigo, descricao: mapPaises.get(s.paisCodigo) };
-    return s;
-  };
-
-  const processOne = async (e) => {
-    const base = e.cnpjBasico;
-
-    const [estabelecimentos, socios, simples] = await Promise.all([
-      colEstabs.find({ cnpjBasico: base }, { projection: { _id: 0 } }).toArray(),
-      colSocios.find({ cnpjBasico: base }, { projection: { _id: 0 } }).toArray(),
-      colSimples.findOne({ cnpjBasico: base }, { projection: { _id: 0 } }),
-    ]);
-
-    const estEnriquecidos = (estabelecimentos || []).map(enrichEstab);
-    const sociosEnriquecidos = (socios || []).map(enrichSocio);
-
-    const empresaAgg = {
-      cnpjBasico: base,
-      razaoSocial: e.razaoSocial,
-      natureza: e.naturezaCodigo
-        ? { codigo: e.naturezaCodigo, descricao: mapNaturezas.get(e.naturezaCodigo) }
-        : undefined,
-      qualificacaoResponsavel: e.qualificacaoResponsavelCodigo
-        ? { codigo: e.qualificacaoResponsavelCodigo, descricao: mapQualif.get(e.qualificacaoResponsavelCodigo) }
-        : undefined,
-      capitalSocial: e.capitalSocial,
-      porte: e.porte,
-      enteFederativoResponsavel: e.enteFederativoResponsavel,
-      estabelecimentos: estEnriquecidos,
-      socios: sociosEnriquecidos,
-      simples: simples || undefined,
-      updatedAt: new Date(),
-    };
-
-    return {
-      updateOne: {
-        filter: { cnpjBasico: base },
-        update: { $set: empresaAgg, $setOnInsert: { createdAt: new Date() } },
-        upsert: true,
-      },
-    };
-  };
-
-  const flushBatch = async (ops) => {
-    if (!ops.length) return;
-    await colAgg.bulkWrite(ops, { ordered: false });
+  const safeFindOne = async (col, filter) => {
+    for (let i = 0; i < 20; i++) {
+      try {
+        return await col.findOne(filter);
+      } catch (err) {
+        console.log(`Erro no findOne (tentativa ${i + 1})...`);
+        await new Promise(r => setTimeout(r, 8000));
+      }
+    }
+    return null;
   };
 
   while (await cursor.hasNext()) {
-    const e = await cursor.next();
-    batch.push(e);
+    const batch = [];
+    for (let i = 0; i < BATCH_SIZE && await cursor.hasNext(); i++) {
+      batch.push(await cursor.next());
+    }
 
-    if (batch.length >= BATCH_SIZE) {
-      const ops = await Promise.all(batch.map((empresa) => limit(() => processOne(empresa))));
-      await flushBatch(ops);
+    const ops = [];
+    for (const empresa of batch) {
+      const base = empresa.cnpjBasico;
+
+      const [estabs, socios, simples] = await Promise.all([
+        safeFind(colEstabs, { cnpjBasico: base }),
+        safeFind(colSocios, { cnpjBasico: base }),
+        safeFindOne(colSimples, { cnpjBasico: base }),
+      ]);
+
+      // Enriquecimento (sem falhar)
+      const estEnriq = (estabs || []).map(e => {
+        e.endereco ||= {};
+        e.endereco.municipio = e.endereco.municipioCodigo ? { codigo: e.endereco.municipioCodigo, descricao: mapMun.get(e.endereco.municipioCodigo) || 'Não encontrado' } : null;
+        e.cnaeFiscalPrincipal = e.cnaeFiscalPrincipalCodigo ? { codigo: e.cnaeFiscalPrincipalCodigo, descricao: mapCnae.get(e.cnaeFiscalPrincipalCodigo) || 'Não encontrado' } : null;
+        return e;
+      });
+
+      const aggDoc = {
+        cnpjBasico: base,
+        razaoSocial: empresa.razaoSocial || 'NÃO INFORMADO',
+        natureza: empresa.naturezaCodigo ? { codigo: empresa.naturezaCodigo, descricao: mapNat.get(empresa.naturezaCodigo) || 'Não encontrado' } : null,
+        capitalSocial: empresa.capitalSocial,
+        porte: empresa.porte,
+        enteFederativoResponsavel: empresa.enteFederativoResponsavel,
+        estabelecimentos: estEnriq,
+        socios: (socios || []).map(s => ({
+          ...s,
+          qualificacaoSocio: s.qualificacaoSocioCodigo ? { codigo: s.qualificacaoSocioCodigo, descricao: mapQual.get(s.qualificacaoSocioCodigo) || 'Não encontrado' } : null,
+        })),
+        simples: simples || null,
+        updatedAt: new Date(),
+      };
+
+      ops.push({
+        updateOne: {
+          filter: { cnpjBasico: base },
+          update: { $set: aggDoc },
+          upsert: true,
+        },
+      });
+    }
+
+    // Flush com retry
+    for (let t = 0; t < 20; t++) {
+      try {
+        await colAgg.bulkWrite(ops, { ordered: false });
+        break;
+      } catch (err) {
+        console.log(`Erro no bulkWrite da agregação (tentativa ${t + 1}/20), reconectando...`);
+        await new Promise(r => setTimeout(r, (t + 1) * 10000));
+        client = await getClient();
+      }
+    }
+
+    processed += batch.length;
+    process.stdout.write(`empresas_agg: ${processed.toLocaleString()} empresas processadas\r`);
+  }
+
+  console.log(`\nAGREGAÇÃO CONCLUÍDA: ${processed.toLocaleString()} empresas em empresas_agg`);
+}
+
+/* =============== ATUALIZAÇÃO INCREMENTAL DA empresas_agg (SÓ O QUE FALTA) =============== */
+/* ================= CLIENTE COM RECONEXÃO INFINITA (OBRIGATÓRIO) ================= */
+let globalClient = null;
+async function getClient() {
+  if (globalClient?.topology?.isConnected()) return globalClient;
+  if (globalClient) await globalClient.close().catch(() => {});
+
+  while (true) {
+    try {
+      globalClient = new MongoClient(MONGO_URI, {
+        maxPoolSize: 5,
+        minPoolSize: 1,
+        maxIdleTimeMS: 0,
+        connectTimeoutMS: 30000,
+        socketTimeoutMS: 0,
+        serverSelectionTimeoutMS: 30000,
+        heartbeatFrequencyMS: 10000,
+        retryWrites: true,
+        retryReads: true,
+      });
+      await globalClient.connect();
+      console.log('MongoDB reconectado com sucesso!');
+      return globalClient;
+    } catch (err) {
+      console.log('Falha na conexão. Tentando novamente em 15 segundos...');
+      await new Promise(r => setTimeout(r, 15000));
+    }
+  }
+}
+
+/* =============== ATUALIZAÇÃO INCREMENTAL INDESTRUTÍVEL =============== */
+async function updateEmpresasAgg() {
+  console.log('INICIANDO ATUALIZAÇÃO INCREMENTAL DA empresas_agg (versão à prova de quedas)');
+
+  let client = await getClient();
+  let processed = 0;
+  let inserted = 0;
+  let updated = 0;
+
+  // Carrega domínios com retry infinito
+  const loadMapWithRetry = async (collName) => {
+    const map = new Map();
+    while (true) {
+      try {
+        client = await getClient();
+        const col = client.db(DB_NAME).collection(collName);
+        for await (const doc of col.find({}, { projection: { codigo: 1, descricao: 1, _id: 0 } })) {
+          if (doc.codigo) map.set(doc.codigo, doc.descricao || 'Não encontrado');
+        }
+        console.log(`${collName} carregado (${map.size} itens)`);
+        return map;
+      } catch (err) {
+        console.log(`Erro ao carregar ${collName}. Reconectando...`);
+        await new Promise(r => setTimeout(r, 10000));
+      }
+    }
+  };
+
+  console.log('Carregando domínios (pode demorar, mas NUNCA para)...');
+  const [mapNat, mapMun, mapQual, mapCnae, mapPais, mapMot] = await Promise.all([
+    loadMapWithRetry('naturezas'),
+    loadMapWithRetry('municipios'),
+    loadMapWithRetry('qualificacoes'),
+    loadMapWithRetry('cnaes'),
+    loadMapWithRetry('paises'),
+    loadMapWithRetry('motivos'),
+  ]);
+
+  const BATCH_SIZE = 400;
+
+  while (true) {
+    try {
+      client = await getClient();
+      const db = client.db(DB_NAME);
+      const colAgg = db.collection('empresas_agg');
+      const colEmpresas = db.collection('empresas');
+      const colEstabs = db.collection('estabelecimentos');
+      const colSocios = db.collection('socios');
+      const colSimples = db.collection('simples');
+
+      // Pega apenas empresas que ainda não estão na agg
+      const existingCnpjs = await colAgg.distinct('cnpjBasico');
+      const cursor = colEmpresas.find(
+        { cnpjBasico: { $nin: existingCnpjs } },
+        {
+          projection: {
+            cnpjBasico: 1, razaoSocial: 1, naturezaCodigo: 1,
+            qualificacaoResponsavelCodigo: 1, capitalSocial: 1, porte: 1,
+            enteFederativoResponsavel: 1
+          }
+        }
+      ).batchSize(500);
+
+      let hasMore = false;
+      const batch = [];
+
+      for (let i = 0; i < BATCH_SIZE; i++) {
+        if (await cursor.hasNext()) {
+          batch.push(await cursor.next());
+          hasMore = true;
+        } else {
+          hasMore = false;
+          break;
+        }
+      }
+
+      if (!hasMore && batch.length === 0) {
+        console.log('\nTUDO ATUALIZADO! Não há mais empresas faltando na empresas_agg');
+        break;
+      }
+
+      const ops = [];
+
+      for (const emp of batch) {
+        const base = emp.cnpjBasico;
+
+        const [estabs, socios, simples] = await Promise.all([
+          db.collection('estabelecimentos').find({ cnpjBasico: base }).toArray().catch(() => []),
+          db.collection('socios').find({ cnpjBasico: base }).toArray().catch(() => []),
+          db.collection('simples').findOne({ cnpjBasico: base }).catch(() => null),
+        ]);
+
+        const aggDoc = {
+          cnpjBasico: base,
+          razaoSocial: emp.razaoSocial || 'NÃO INFORMADO',
+          natureza: emp.naturezaCodigo ? { codigo: emp.naturezaCodigo, descricao: mapNat.get(emp.naturezaCodigo) } : null,
+          capitalSocial: emp.capitalSocial,
+          porte: emp.porte,
+          enteFederativoResponsavel: emp.enteFederativoResponsavel,
+          estabelecimentos: (estabs || []).map(e => ({
+            ...e,
+            endereco: {
+              ...e.endereco,
+              municipio: e.endereco?.municipioCodigo ? { codigo: e.endereco.municipioCodigo, descricao: mapMun.get(e.endereco.municipioCodigo) } : null
+            },
+            cnaeFiscalPrincipal: e.cnaeFiscalPrincipalCodigo ? { codigo: e.cnaeFiscalPrincipalCodigo, descricao: mapCnae.get(e.cnaeFiscalPrincipalCodigo) } : null
+          })),
+          socios: (socios || []).map(s => ({
+            ...s,
+            qualificacaoSocio: s.qualificacaoSocioCodigo ? { codigo: s.qualificacaoSocioCodigo, descricao: mapQual.get(s.qualificacaoSocioCodigo) } : null
+          })),
+          simples: simples || null,
+          updatedAt: new Date(),
+        };
+
+        ops.push({
+          replaceOne: {
+            filter: { cnpjBasico: base },
+            replacement: aggDoc,
+            upsert: true
+          }
+        });
+
+        inserted++;
+      }
+
+      // BulkWrite com retry infinito
+      while (true) {
+        try {
+          await colAgg.bulkWrite(ops, { ordered: false });
+          break;
+        } catch (err) {
+          console.log('Erro no bulkWrite. Reconectando em 10s...');
+          await new Promise(r => setTimeout(r, 10000));
+          client = await getClient();
+        }
+      }
+
       processed += batch.length;
-      process.stdout.write(`empresas_agg: ${processed}\r`);
-      batch = [];
+      process.stdout.write(`Processadas: ${processed.toLocaleString()} | Inseridas: ${inserted.toLocaleString()}   \r`);
+
+    } catch (err) {
+      console.log('Erro geral. Reconectando em 15s...');
+      await new Promise(r => setTimeout(r, 15000));
     }
   }
 
-  if (batch.length) {
-    const ops = await Promise.all(batch.map((empresa) => limit(() => processOne(empresa))));
-    await flushBatch(ops);
-    processed += batch.length;
-    process.stdout.write(`empresas_agg: ${processed}\r`);
-  }
-
-  console.log(`\nempresas_agg finalizado: ${processed} empresas agregadas`);
+  console.log(`\nATUALIZAÇÃO CONCLUÍDA COM SUCESSO!`);
+  console.log(`Total inseridas na empresas_agg: ${inserted.toLocaleString()}`);
 }
 
 /* ================= RUN ================= */
 async function run() {
-  // Garante estrutura de pastas
   await Promise.all(
     Object.values(DIRS).map((d) => fs.promises.mkdir(path.join(ROOT, d), { recursive: true }))
   );
 
-  console.log('> Buscando mês mais recente e baixando arquivos...');
-  await fetchLatestMonthAndExtract();
+  console.log('> Extraindo todos os ZIPs locais...');
+  // await extractAllLocalZips();
 
   const client = new MongoClient(MONGO_URI, {
-    maxPoolSize: 5,
-    socketTimeoutMS: SOCKET_TIMEOUT_MS,
-    connectTimeoutMS: SOCKET_TIMEOUT_MS,
-    dbName: DB_NAME,
+    maxPoolSize: 20,
+    minPoolSize: 10,
+    maxIdleTimeMS: 0,
+    socketTimeoutMS: 0,               // sem timeout de socket
+    connectTimeoutMS: 300000,         // 5 minutos
+    serverSelectionTimeoutMS: 30000,
+    heartbeatFrequencyMS: 10000,
+    retryWrites: true,
+    retryReads: true,
+    compressors: ['zlib'],
   });
   await client.connect();
 
@@ -727,20 +1072,19 @@ async function run() {
   await importDom2(client, 'cnaes', DIRS.cnaes);
   await importDom2(client, 'motivos', DIRS.motivos);
 
-  console.log('> Importando tabelas grandes (com upsert)...');
-  await importEmpresas(client);
-  await importEstabelecimentos(client);
-  await importSocios(client);
-  await importSimples(client);
+  console.log('> Importando tabelas principais...');
+  // Estas duas você já rodou antes. Se precisar reprocessar no futuro, é só descomentar.
+  // await importEmpresas(client);
+  // await importEstabelecimentos(client);
+  // await importSocios(client);
+  // await importSimples(client);
 
-  console.log('> Construindo empresas_agg...');
-  await buildEmpresasAgg(client);
-
-  await client.close();
-  console.log('✅ Tudo concluído.');
+  console.log('> Construindo coleção agregada (empresas_agg)...');
+  await updateEmpresasAgg();
+  console.log('Tudo concluído com sucesso!');
 }
 
 run().catch((err) => {
-  console.error(err);
+  console.error('Erro fatal:', err);
   process.exit(1);
 });
