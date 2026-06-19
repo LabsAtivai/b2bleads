@@ -12,7 +12,7 @@ export async function connectMongo() {
       serverSelectionTimeoutMS: 30000,
       connectTimeoutMS: 30000,
       socketTimeoutMS: 0,
-      compressors: ['zstd', 'zlib'],
+      compressors: ['zlib'],
     })
 
     console.log('✅ Conectado ao MongoDB com Mongoose!')
