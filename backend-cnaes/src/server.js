@@ -17,16 +17,15 @@ import { parseCapitalSocial } from "./filters.js";
 // ======= CONFIG =======
 const READ_PREFERENCE = process.env.MONGO_READ_PREFERENCE || "primaryPreferred";
 const DEFAULT_PAGE_SIZE = 10;
-const MAX_TIME_MS_PRIMARY = Number(process.env.MAX_TIME_MS || 2000);
-const MAX_TIME_MS_RETRY = Number(process.env.MAX_TIME_MS_RETRY || 8000);
-const MAX_EXPORT_ROWS = Number(process.env.MAX_EXPORT_ROWS || 50000); // [FIX] limite de exportação
+const MAX_TIME_MS_PRIMARY = Number(process.env.MAX_TIME_MS || 5000);
+const MAX_TIME_MS_RETRY = Number(process.env.MAX_TIME_MS_RETRY || 15000);
+const MAX_EXPORT_ROWS = Number(process.env.MAX_EXPORT_ROWS || 50000);
 
 const INATIVA_CODES = (process.env.INATIVA_CODES || "1,3,4,8,9")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
 
-// [FIX] CORS: lista de origens via env (em dev aceita localhost, em prod restringe)
 const allowedOrigins = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(",").map((s) => s.trim())
   : ["http://localhost:5173", "http://localhost:3000"];
@@ -82,6 +81,53 @@ function toObjectId(id) {
   }
 }
 
+// ======= CACHE em memória para sugestões =======
+class SimpleCache {
+  constructor(ttlMs = 600000) {
+    this.store = new Map();
+    this.ttl = ttlMs;
+  }
+  get(key) {
+    const entry = this.store.get(key);
+    if (!entry) return undefined;
+    if (Date.now() - entry.ts > this.ttl) { this.store.delete(key); return undefined; }
+    return entry.data;
+  }
+  set(key, data) {
+    this.store.set(key, { data, ts: Date.now() });
+    if (this.store.size > 500) {
+      const oldest = this.store.keys().next().value;
+      this.store.delete(oldest);
+    }
+  }
+}
+
+const suggestCache = new SimpleCache(10 * 60 * 1000);
+
+// ======= Projection para listagem (campos essenciais) =======
+const LIST_PROJECTION = {
+  razaoSocial: 1,
+  "porte.codigo": 1,
+  "porte.descricao": 1,
+  "natureza.codigo": 1,
+  "natureza.descricao": 1,
+  capitalSocial: 1,
+  "simples.opcaoSimples": 1,
+  "simples.opcaoMei": 1,
+  "estabelecimentos.cnpj": 1,
+  "estabelecimentos.nomeFantasia": 1,
+  "estabelecimentos.situacaoCadastral": 1,
+  "estabelecimentos.cnaeFiscalPrincipalCodigo": 1,
+  "estabelecimentos.cnaeFiscalPrincipal": 1,
+  "estabelecimentos.email": 1,
+  "estabelecimentos.telefones": 1,
+  "estabelecimentos.contatos.email": 1,
+  "estabelecimentos.contatos.telefone1": 1,
+  "estabelecimentos.endereco.uf": 1,
+  "estabelecimentos.endereco.municipio": 1,
+  "estabelecimentos.dataInicioAtividade": 1,
+};
+
 // ======= Zod schema =======
 const SearchSchema = z.object({
   nome: z.string().optional(),
@@ -122,7 +168,7 @@ function timingHeader(_req, res, next) {
   next();
 }
 
-// [FIX] buildFilter extraído — elimina triplicação de código
+// ======= buildFilter =======
 function buildFilter(p) {
   const and = [];
 
@@ -236,7 +282,6 @@ function buildFilter(p) {
     }
   }
 
-  // Filtros de localização separados (uf, cidade, cep)
   if (p.uf && p.cidade) {
     and.push({
       estabelecimentos: {
@@ -269,11 +314,9 @@ function buildFilter(p) {
     }
   }
 
-  // Capital social
   const cap = parseCapitalSocial(p.capitalSocial) || {};
   if (Object.keys(cap).length) and.push(cap);
 
-  // Telefone
   if (p.telefone) {
     const tel = p.telefone.replace(/\D/g, "");
     if (tel.length > 0) {
@@ -288,7 +331,6 @@ function buildFilter(p) {
     }
   }
 
-  // "Tem email" / "Tem telefone"
   if (p.temEmail === "1") {
     and.push({
       $or: [
@@ -306,7 +348,6 @@ function buildFilter(p) {
     });
   }
 
-  // Simples Nacional / MEI
   if (p.simplesNacional) {
     const opt = p.simplesNacional.toUpperCase();
     if (opt === "SIMPLES") and.push({ "simples.opcaoSimples": true });
@@ -319,7 +360,6 @@ function buildFilter(p) {
     });
   }
 
-  // Data de abertura (formato YYYYMMDD nos dados da RF)
   if (p.dataAberturaMin || p.dataAberturaMax) {
     const dateFilter = {};
     if (p.dataAberturaMin) {
@@ -345,7 +385,8 @@ function buildFilter(p) {
   const app = express();
   app.disable("x-powered-by");
 
-  // [FIX] CORS restrito a origens configuradas
+  app.use(express.json({ limit: "1mb" }));
+
   app.use(
     cors({
       origin: (origin, cb) => {
@@ -358,7 +399,7 @@ function buildFilter(p) {
   // HEALTH
   app.get("/health", async (_req, res) => {
     try {
-      await Empresa.findOne({}, { _id: 1 }).read(READ_PREFERENCE).maxTimeMS(1000).lean();
+      await Empresa.findOne({}, { _id: 1 }).read(READ_PREFERENCE).maxTimeMS(2000).lean();
       res.json({ api: "ok", db: "ok" });
     } catch (e) {
       res.status(500).json({ api: "ok", db: "fail", detail: e.message });
@@ -375,7 +416,8 @@ function buildFilter(p) {
     }
 
     const limit = p.pageSize || DEFAULT_PAGE_SIZE;
-    const filter = buildFilter(p); // [FIX] usa função centralizada
+    const filter = buildFilter(p);
+    const hasFilter = Object.keys(filter).length > 0;
 
     const sortSpec = { _id: -1 };
     const range = {};
@@ -391,7 +433,7 @@ function buildFilter(p) {
     try {
       async function runFind() {
         try {
-          return await Empresa.find(finalFilter)
+          return await Empresa.find(finalFilter, LIST_PROJECTION)
             .sort(sortSpec)
             .limit(limit + 1)
             .read(READ_PREFERENCE)
@@ -400,8 +442,8 @@ function buildFilter(p) {
             .exec();
         } catch (e) {
           if (e.code === 50) {
-            console.warn("[/api/empresas] MaxTimeMSExpired, retry com secondaryPreferred...");
-            return await Empresa.find(finalFilter)
+            console.warn("[/api/empresas] MaxTimeMSExpired, retry...");
+            return await Empresa.find(finalFilter, LIST_PROJECTION)
               .sort(sortSpec)
               .limit(limit + 1)
               .read("secondaryPreferred")
@@ -413,18 +455,16 @@ function buildFilter(p) {
         }
       }
 
-      // [FIX] count só na primeira página (sem cursor) para não sobrecarregar
       const countPromise =
-        !p.cursor
+        !p.cursor && hasFilter
           ? Empresa.countDocuments(filter)
               .read(READ_PREFERENCE)
               .maxTimeMS(MAX_TIME_MS_RETRY)
               .exec()
-              .catch((err) => {
-                console.warn("[/api/empresas] countDocuments falhou:", err.message);
-                return undefined;
-              })
-          : Promise.resolve(undefined);
+              .catch(() => undefined)
+          : !p.cursor && !hasFilter
+            ? Empresa.estimatedDocumentCount().exec().catch(() => undefined)
+            : Promise.resolve(undefined);
 
       const [docs, total] = await Promise.all([runFind(), countPromise]);
 
@@ -452,14 +492,14 @@ function buildFilter(p) {
       return res.status(400).json({ error: "Parâmetros inválidos", detail: e.message });
     }
 
-    const filter = buildFilter(p); // [FIX] usa função centralizada
+    const filter = buildFilter(p);
 
     try {
       const filename = `empresas_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.csv`;
       res.setHeader("Content-Type", "text/csv; charset=utf-8");
       res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
       res.setHeader("Cache-Control", "no-cache");
-      res.write("\uFEFF");
+      res.write("﻿");
 
       const header = ["CNPJ", "RazaoSocial", "NomeFantasia", "Email", "CidadeUF", "CNAE", "Telefone", "Porte", "NaturezaJuridica"];
       res.write(header.join(",") + "\r\n");
@@ -470,7 +510,6 @@ function buildFilter(p) {
         return `"${s}"`;
       };
 
-      // [FIX] limite de exportação para evitar esgotamento de memória
       const cursor = Empresa.find(filter)
         .sort({ _id: -1 })
         .limit(MAX_EXPORT_ROWS)
@@ -501,7 +540,6 @@ function buildFilter(p) {
         ].join(",") + "\r\n");
       }
 
-      // [FIX] avisa se truncado
       if (count >= MAX_EXPORT_ROWS) {
         res.setHeader("X-Truncated", "true");
         res.setHeader("X-Max-Rows", String(MAX_EXPORT_ROWS));
@@ -528,7 +566,7 @@ function buildFilter(p) {
         return res.status(400).json({ error: "Parâmetros inválidos", detail: e.message });
       }
 
-      const filter = buildFilter(p); // [FIX] usa função centralizada
+      const filter = buildFilter(p);
 
       try {
         const filename = `empresas_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.xlsx`;
@@ -537,7 +575,6 @@ function buildFilter(p) {
 
         sheet.addRow(["CNPJ", "RazaoSocial", "NomeFantasia", "Email", "CidadeUF", "CNAE", "Telefone", "Porte", "NaturezaJuridica"]);
 
-        // [FIX] limite de exportação
         const cursor = Empresa.find(filter)
           .sort({ _id: -1 })
           .limit(MAX_EXPORT_ROWS)
@@ -584,7 +621,8 @@ function buildFilter(p) {
     }
   );
 
-  // ======= SUGGESTIONS =======
+  // ======= SUGGESTIONS (otimizadas com tabelas de domínio + cache) =======
+
   app.get("/api/suggest/porte", async (req, res) => {
     const raw = (req.query.q ?? "").toString();
     const q = raw.trim().toUpperCase();
@@ -608,18 +646,20 @@ function buildFilter(p) {
 
   app.get("/api/suggest/natureza", async (req, res) => {
     const q = (req.query.q || "").trim();
-    const match = q ? new RegExp(reEscape(q), "i") : null;
+    const cacheKey = `nat:${q}`;
+    const cached = suggestCache.get(cacheKey);
+    if (cached) return res.json(cached);
+
     try {
-      const filter = match
-        ? { $or: [{ "natureza.codigo": match }, { "natureza.descricao": match }] }
+      const db = mongoose.connection.db;
+      const col = db.collection("naturezas");
+      const filter = q
+        ? { $or: [{ codigo: new RegExp(reEscape(q), "i") }, { descricao: new RegExp(reEscape(q), "i") }] }
         : {};
-      const results = await Empresa.aggregate([
-        { $match: filter },
-        { $group: { _id: { codigo: "$natureza.codigo", descricao: "$natureza.descricao" } } },
-        { $project: { _id: 0, codigo: "$_id.codigo", descricao: "$_id.descricao" } },
-        { $limit: 20 },
-      ]);
-      res.json(results.map((r) => ({ value: r.codigo, label: `${r.codigo} - ${r.descricao}` })));
+      const results = await col.find(filter).limit(20).toArray();
+      const data = results.map((r) => ({ value: r.codigo, label: `${r.codigo} - ${r.descricao}` }));
+      suggestCache.set(cacheKey, data);
+      res.json(data);
     } catch (e) {
       console.error("[suggest/natureza] erro:", e);
       res.status(500).json([]);
@@ -629,30 +669,18 @@ function buildFilter(p) {
   app.get("/api/suggest/cnae", async (req, res) => {
     const q = (req.query.q || "").trim();
     if (!q) return res.json([]);
-    const match = new RegExp(reEscape(q), "i");
+    const cacheKey = `cnae:${q}`;
+    const cached = suggestCache.get(cacheKey);
+    if (cached) return res.json(cached);
+
     try {
-      const results = await Empresa.aggregate([
-        { $unwind: "$estabelecimentos" },
-        {
-          $match: {
-            $or: [
-              { "estabelecimentos.cnaeFiscalPrincipal.codigo": match },
-              { "estabelecimentos.cnaeFiscalPrincipal.descricao": match },
-            ],
-          },
-        },
-        {
-          $group: {
-            _id: {
-              codigo: "$estabelecimentos.cnaeFiscalPrincipal.codigo",
-              descricao: "$estabelecimentos.cnaeFiscalPrincipal.descricao",
-            },
-          },
-        },
-        { $project: { _id: 0, codigo: "$_id.codigo", descricao: "$_id.descricao" } },
-        { $limit: 20 },
-      ]);
-      res.json(results.map((r) => ({ value: r.codigo, label: `${r.codigo} - ${r.descricao}` })));
+      const db = mongoose.connection.db;
+      const col = db.collection("cnaes");
+      const filter = { $or: [{ codigo: new RegExp(reEscape(q), "i") }, { descricao: new RegExp(reEscape(q), "i") }] };
+      const results = await col.find(filter).limit(20).toArray();
+      const data = results.map((r) => ({ value: r.codigo, label: `${r.codigo} - ${r.descricao}` }));
+      suggestCache.set(cacheKey, data);
+      res.json(data);
     } catch (e) {
       console.error("[suggest/cnae] erro:", e);
       res.status(500).json([]);
@@ -660,52 +688,42 @@ function buildFilter(p) {
   });
 
   app.get("/api/suggest/uf", async (_req, res) => {
-    try {
-      const results = await Empresa.aggregate([
-        { $unwind: "$estabelecimentos" },
-        { $group: { _id: "$estabelecimentos.endereco.uf" } },
-        { $match: { _id: { $ne: null } } },
-        { $project: { _id: 0, uf: "$_id" } },
-        { $sort: { uf: 1 } },
-        { $limit: 30 },
-      ]);
-      res.json(results.map((r) => ({ value: r.uf, label: r.uf })));
-    } catch (e) {
-      console.error("[suggest/uf] erro:", e);
-      res.status(500).json([]);
-    }
+    const cached = suggestCache.get("uf:all");
+    if (cached) return res.json(cached);
+
+    const ufs = ["AC","AL","AM","AP","BA","CE","DF","ES","GO","MA","MG","MS","MT","PA","PB","PE","PI","PR","RJ","RN","RO","RR","RS","SC","SE","SP","TO"];
+    const data = ufs.map((u) => ({ value: u, label: u }));
+    suggestCache.set("uf:all", data);
+    res.json(data);
   });
 
   app.get("/api/suggest/cidade", async (req, res) => {
     const q = (req.query.q || "").trim();
     const uf = (req.query.uf || "").trim().toUpperCase();
     if (!q && !uf) return res.json([]);
-    const match = q ? new RegExp(reEscape(q), "i") : null;
-    try {
-      const pipeline = [{ $unwind: "$estabelecimentos" }];
-      const matchStage = {};
-      if (match) matchStage["estabelecimentos.endereco.municipio.descricao"] = match;
-      if (uf) matchStage["estabelecimentos.endereco.uf"] = uf;
-      pipeline.push({ $match: matchStage });
-      pipeline.push({
-        $group: {
-          _id: {
-            cidade: "$estabelecimentos.endereco.municipio.descricao",
-            uf: "$estabelecimentos.endereco.uf",
-          },
-        },
-      });
-      pipeline.push({ $project: { _id: 0, cidade: "$_id.cidade", uf: "$_id.uf" } });
-      pipeline.push({ $sort: { cidade: 1 } });
-      pipeline.push({ $limit: 30 });
+    const cacheKey = `cid:${uf}:${q}`;
+    const cached = suggestCache.get(cacheKey);
+    if (cached) return res.json(cached);
 
-      const results = await Empresa.aggregate(pipeline);
-      res.json(
-        results.map((r) => ({
-          value: `${r.cidade} - ${r.uf}`,
-          label: `${r.cidade} - ${r.uf}`,
-        }))
-      );
+    try {
+      const db = mongoose.connection.db;
+      const col = db.collection("municipios");
+      const filter = {};
+      if (q) filter.descricao = new RegExp(reEscape(q), "i");
+
+      const results = await col.find(filter).limit(50).toArray();
+
+      const seen = new Set();
+      const data = [];
+      for (const r of results) {
+        const key = r.descricao;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        data.push({ value: key, label: key });
+        if (data.length >= 30) break;
+      }
+      suggestCache.set(cacheKey, data);
+      res.json(data);
     } catch (e) {
       console.error("[suggest/cidade] erro:", e);
       res.status(500).json([]);
@@ -714,15 +732,19 @@ function buildFilter(p) {
 
   app.get("/api/suggest/nome", async (req, res) => {
     const q = (req.query.q || "").trim();
-    const match = q ? new RegExp(reEscape(q), "i") : null;
+    if (!q || q.length < 3) return res.json([]);
+
     try {
-      const cond = match ? { razaoSocial: match } : {};
-      const results = await Empresa.aggregate([
-        { $match: cond },
-        { $project: { _id: 0, nome: "$razaoSocial" } },
-        { $limit: 30 },
-      ]);
-      res.json(results.map((r) => ({ nome: r.nome })));
+      const results = await Empresa.find(
+        { razaoSocial: like(q) },
+        { razaoSocial: 1, _id: 0 }
+      )
+        .limit(15)
+        .read(READ_PREFERENCE)
+        .lean()
+        .maxTimeMS(3000)
+        .exec();
+      res.json(results.map((r) => ({ nome: r.razaoSocial })));
     } catch (e) {
       console.error("[suggest/nome] erro:", e);
       res.status(500).json([]);
@@ -738,7 +760,7 @@ function buildFilter(p) {
       const doc = await Empresa.findOne({ "estabelecimentos.cnpj": cnpj })
         .read(READ_PREFERENCE)
         .lean()
-        .maxTimeMS(2000)
+        .maxTimeMS(5000)
         .exec();
       if (!doc) return res.status(404).json({ error: "Empresa não encontrada" });
       res.json(doc);
