@@ -36,7 +36,7 @@ services:
         VITE_API_BASE_URL: ""
     image: b2bleads/busca-empresas:latest
     ports:
-      - "8080:80"
+      - "8090:80"
     depends_on:
       - backend-cnaes
     restart: unless-stopped
