@@ -2,11 +2,6 @@
 // const axios = require('axios')
 import axios from 'axios'
 
-/**
- * Base da API:
- * - Se VITE_API_BASE_URL estiver setado (ex.: http://localhost:3001), usa `${VITE_API_BASE_URL}/api`
- * - Senão, usa '/api' e deixa o Vite proxy redirecionar para o backend.
- */
 const baseURL =
   (import.meta.env.VITE_API_BASE_URL
     ? `${import.meta.env.VITE_API_BASE_URL.replace(/\/+$/, '')}/api`

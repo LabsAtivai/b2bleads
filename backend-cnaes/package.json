@@ -5,7 +5,9 @@
   "version": "1.0.0",
   "scripts": {
     "dev": "nodemon --watch src/server.js",
-    "start": "node src/server.js"
+    "start": "node src/server.js",
+    "download": "node download-dados-rf.js",
+    "import": "node import.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
@@ -13,10 +15,8 @@
     "dotenv": "^16.6.1",
     "exceljs": "^4.4.0",
     "express": "^4.19.2",
-    "json2csv": "^6.0.0-alpha.2",
     "mongodb": "^6.20.0",
     "mongoose": "^8.18.3",
-    "mysql2": "^3.11.0",
     "nodemon": "^3.1.10",
     "unzipper": "^0.12.3",
     "zod": "^3.23.8"

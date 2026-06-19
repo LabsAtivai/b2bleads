@@ -1,31 +1,54 @@
 <template>
-  <div class="relative" @keydown.down.prevent="move(1)" @keydown.up.prevent="move(-1)" @keydown.enter.prevent="chooseActive()">
-    <label v-if="label" class="block text-sm font-medium text-slate-700 mb-1">{{ label }}</label>
-    <input
-      :placeholder="placeholder"
-      class="input w-full"
-      v-model="inner"
-      @focus="open = true; fetchDebounced()"
-      @input="onInput"
-      @blur="onBlur"
-    />
+  <div class="filter-group">
+    <span v-if="label" class="label">{{ label }}</span>
+    <div class="relative" @keydown.down.prevent="move(1)" @keydown.up.prevent="move(-1)" @keydown.enter.prevent="chooseActive()">
+      <div class="relative">
+        <input
+          :placeholder="placeholder || 'Buscar...'"
+          class="input pr-8"
+          v-model="inner"
+          @focus="open = true; fetchDebounced()"
+          @input="onInput"
+          @blur="onBlur"
+        />
+        <button
+          v-if="inner"
+          type="button"
+          class="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
+          @mousedown.prevent="clear"
+        >
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
 
-    <div
-      v-if="open && suggestions.length"
-      class="absolute z-20 mt-1 w-full bg-white border border-slate-200 rounded-xl shadow-lg max-h-64 overflow-auto"
-    >
-      <button
-        v-for="(opt, idx) in suggestions"
-        :key="opt.value + '_' + idx"
-        type="button"
-        class="w-full text-left px-3 py-2 hover:bg-slate-50"
-        :class="idx === active ? 'bg-slate-50' : ''"
-        @mousedown.prevent="select(opt)"
-        @mousemove="active = idx"
+      <Transition
+        enter-active-class="transition duration-100 ease-out"
+        enter-from-class="opacity-0 scale-95 -translate-y-1"
+        enter-to-class="opacity-100 scale-100 translate-y-0"
+        leave-active-class="transition duration-75 ease-in"
+        leave-from-class="opacity-100 scale-100"
+        leave-to-class="opacity-0 scale-95"
       >
-        <div class="text-sm">{{ opt.label }}</div>
-        <div v-if="showValue" class="text-xs text-slate-500">{{ opt.value }}</div>
-      </button>
+        <div
+          v-if="open && suggestions.length"
+          class="absolute z-30 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-56 overflow-auto"
+        >
+          <button
+            v-for="(opt, idx) in suggestions"
+            :key="opt.value + '_' + idx"
+            type="button"
+            class="w-full text-left px-3 py-2 text-sm transition-colors"
+            :class="idx === active ? 'bg-blue-50 text-blue-700' : 'text-gray-700 hover:bg-gray-50'"
+            @mousedown.prevent="select(opt)"
+            @mousemove="active = idx"
+          >
+            <span>{{ opt.label }}</span>
+            <span v-if="showValue && opt.value !== opt.label" class="ml-1 text-xs text-gray-400">{{ opt.value }}</span>
+          </button>
+        </div>
+      </Transition>
     </div>
   </div>
 </template>
@@ -38,7 +61,7 @@ const props = defineProps({
   label: String,
   placeholder: String,
   showValue: { type: Boolean, default: false },
-  fetcher: { type: Function, required: true }, // (q) => Promise<{value,label}[]>
+  fetcher: { type: Function, required: true },
 })
 
 const emit = defineEmits(['update:modelValue', 'select'])
@@ -50,17 +73,13 @@ const active = ref(-1)
 
 watch(() => props.modelValue, v => inner.value = v || '')
 
-function debounce(fn, ms = 300) {
-  let t
-  return (...args) => {
-    clearTimeout(t)
-    t = setTimeout(() => fn(...args), ms)
-  }
+let timer = null
+function fetchDebounced() {
+  clearTimeout(timer)
+  timer = setTimeout(doFetch, 250)
 }
 
-const fetchDebounced = debounce(fetch)
-
-async function fetch() {
+async function doFetch() {
   try {
     const list = await props.fetcher(inner.value || '')
     suggestions.value = list
@@ -97,5 +116,11 @@ function select(opt) {
   emit('update:modelValue', inner.value)
   emit('select', opt)
   open.value = false
+}
+
+function clear() {
+  inner.value = ''
+  emit('update:modelValue', '')
+  suggestions.value = []
 }
 </script>
