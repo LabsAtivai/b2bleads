@@ -131,6 +131,20 @@ function formatCnpj(c) {
   return `${c.slice(0,2)}.${c.slice(2,5)}.${c.slice(5,8)}/${c.slice(8,12)}-${c.slice(12)}`;
 }
 
+const totalPages = computed(() => {
+  if (!total.value || !form.value.pageSize) return 0;
+  return Math.ceil(total.value / form.value.pageSize);
+});
+
+const rangeStart = computed(() => {
+  return ((currentPage.value - 1) * form.value.pageSize) + 1;
+});
+
+const rangeEnd = computed(() => {
+  const end = currentPage.value * form.value.pageSize;
+  return Math.min(end, total.value);
+});
+
 const advancedCount = computed(() => {
   let n = 0;
   const f = form.value;
@@ -300,7 +314,9 @@ onMounted(fetchNow);
           <button class="btn btn-secondary !px-2.5" @click="paginaAnterior" :disabled="!cursorHistory.length || loading" title="Página anterior">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
           </button>
-          <span class="text-xs text-gray-500 px-2 tabular-nums min-w-[60px] text-center">Pág. {{ currentPage }}</span>
+          <span class="text-xs text-gray-500 px-2 tabular-nums min-w-[80px] text-center">
+            {{ currentPage }} / {{ totalPages || '—' }}
+          </span>
           <button class="btn btn-secondary !px-2.5" @click="proximaPagina" :disabled="!nextCursor || loading" title="Próxima página">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
           </button>
@@ -326,9 +342,13 @@ onMounted(fetchNow);
 
         <div class="flex-1"></div>
 
-        <span v-if="!loading && total > 0" class="text-xs text-gray-500 tabular-nums">
-          <strong class="text-gray-700">{{ total.toLocaleString("pt-BR") }}</strong> empresa{{ total !== 1 ? "s" : "" }}
-        </span>
+        <div v-if="!loading && total > 0" class="flex items-center gap-2 text-xs tabular-nums">
+          <span class="text-gray-400">
+            {{ rangeStart }}–{{ rangeEnd }} de
+          </span>
+          <span class="font-semibold text-gray-700">{{ total.toLocaleString("pt-BR") }}</span>
+          <span class="text-gray-400">empresa{{ total !== 1 ? "s" : "" }}</span>
+        </div>
         <span v-else-if="loading" class="text-xs text-gray-400 animate-pulse">Buscando...</span>
       </div>
     </div>

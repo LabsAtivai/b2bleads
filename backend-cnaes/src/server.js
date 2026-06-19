@@ -455,16 +455,13 @@ function buildFilter(p) {
         }
       }
 
-      const countPromise =
-        !p.cursor && hasFilter
-          ? Empresa.countDocuments(filter)
-              .read(READ_PREFERENCE)
-              .maxTimeMS(MAX_TIME_MS_RETRY)
-              .exec()
-              .catch(() => undefined)
-          : !p.cursor && !hasFilter
-            ? Empresa.estimatedDocumentCount().exec().catch(() => undefined)
-            : Promise.resolve(undefined);
+      const countPromise = hasFilter
+        ? Empresa.countDocuments(filter)
+            .read(READ_PREFERENCE)
+            .maxTimeMS(MAX_TIME_MS_RETRY)
+            .exec()
+            .catch(() => undefined)
+        : Empresa.estimatedDocumentCount().exec().catch(() => undefined);
 
       const [docs, total] = await Promise.all([runFind(), countPromise]);
 
