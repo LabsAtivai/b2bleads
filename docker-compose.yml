@@ -14,10 +14,15 @@ services:
     image: b2bleads/backend-cnaes:latest
     ports:
       - "3010:3010"
-    env_file:
-      - ./backend-cnaes/.env
     environment:
       - PORT=3010
+      - DB_HOST=${DB_HOST:-207.244.249.157}
+      - DB_PORT=${DB_PORT:-27017}
+      - DB_USER=${DB_USER:-admin}
+      - DB_PASS=${DB_PASS}
+      - DB_NAME=${DB_NAME:-receitafederal}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:5173,https://api-b2b.labsativa.com.br}
+      - MAX_EXPORT_ROWS=${MAX_EXPORT_ROWS:-50000}
     restart: unless-stopped
     networks:
       - ativaai
