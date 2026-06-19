@@ -11,7 +11,6 @@ services:
     build:
       context: ./backend-cnaes
       dockerfile: Dockerfile
-    image: b2bleads/backend-cnaes:latest
     ports:
       - "3010:3010"
     environment:
@@ -34,7 +33,6 @@ services:
       dockerfile: Dockerfile
       args:
         VITE_API_BASE_URL: ""
-    image: b2bleads/busca-empresas:latest
     ports:
       - "8090:80"
     depends_on:
