@@ -172,6 +172,18 @@ empresaSchema.index(
   { name: 'estab_sit_cadastral_ord' }
 );
 
+// Capital social (filtro de intervalo/comparação)
+empresaSchema.index(
+  { capitalSocial: 1, updatedAt: -1 },
+  { name: 'capital_ord' }
+);
+
+// E-mail (campo achatado do estabelecimento)
+empresaSchema.index(
+  { 'estabelecimentos.email': 1 },
+  { name: 'estabelecimentos.email_1' }
+);
+
 // Texto razão social / nome fantasia
 empresaSchema.index(
   { razaoSocial: 'text', 'estabelecimentos.nomeFantasia': 'text' },
