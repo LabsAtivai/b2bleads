@@ -74,21 +74,3 @@ export function toApiParams(form = {}) {
     cursor: form.cursor,
   })
 }
-
-
-
-export async function exportEmpresasCsv() {
-  const http = await get()
-  const response = await http.get('/empresas/export', {
-    responseType: 'blob' // importante para baixar arquivo
-  })
-
-  // cria link temporário para download
-  const url = window.URL.createObjectURL(new Blob([response.data]))
-  const link = document.createElement('a')
-  link.href = url
-  link.setAttribute('download', 'BaseB2B.csv')
-  document.body.appendChild(link)
-  link.click()
-  link.remove()
-}

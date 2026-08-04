@@ -121,60 +121,59 @@ empresaSchema.index(
   { name: 'ux_cnpj_basico', unique: true }
 );
 
-empresaSchema.index(
-  { updatedAt: -1, _id: -1 },
-  { name: 'ord_updated__id' }
-);
+// Nota: não há índice dedicado para "sem filtro, ordenar por _id" — o índice
+// padrão _id_ já cobre esse caso. Os índices abaixo terminam em _id (não em
+// updatedAt) porque é por _id que a API sempre ordena os resultados.
 
 // Porte / natureza
 empresaSchema.index(
-  { 'porte.codigo': 1, updatedAt: -1 },
+  { 'porte.codigo': 1, _id: -1 },
   { name: 'porte_cod_ord' }
 );
 empresaSchema.index(
-  { 'natureza.codigo': 1, updatedAt: -1 },
+  { 'natureza.codigo': 1, _id: -1 },
   { name: 'nat_cod_ord' }
 );
 
 // CNAE principal / secundário
 empresaSchema.index(
-  { 'estabelecimentos.cnaeFiscalPrincipalCodigo': 1, updatedAt: -1 },
+  { 'estabelecimentos.cnaeFiscalPrincipalCodigo': 1, _id: -1 },
   { name: 'estab_cnae_princ_ord' }
 );
 empresaSchema.index(
-  { 'estabelecimentos.cnaesSecundariosCodigos': 1, updatedAt: -1 },
+  { 'estabelecimentos.cnaesSecundariosCodigos': 1, _id: -1 },
   { name: 'estab_cnae_sec_ord' }
 );
 
 // Localização
 empresaSchema.index(
-  { 'estabelecimentos.endereco.uf': 1, updatedAt: -1 },
+  { 'estabelecimentos.endereco.uf': 1, _id: -1 },
   { name: 'loc_uf_ord' }
 );
 empresaSchema.index(
-  { 'estabelecimentos.endereco.municipio.descricao': 1, updatedAt: -1 },
+  { 'estabelecimentos.endereco.municipio.descricao': 1, _id: -1 },
   { name: 'loc_cidade_ord' }
 );
 empresaSchema.index(
-  { 'estabelecimentos.endereco.cep': 1, updatedAt: -1 },
+  { 'estabelecimentos.endereco.cep': 1, _id: -1 },
   { name: 'loc_cep_ord' }
 );
 
 // 🔹 CNPJ do estabelecimento (pra filtro e /:cnpj)
 empresaSchema.index(
-  { 'estabelecimentos.cnpj': 1, updatedAt: -1 },
+  { 'estabelecimentos.cnpj': 1, _id: -1 },
   { name: 'estab_cnpj_ord' }
 );
 
 // Situação cadastral (ATIVA/INATIVA)
 empresaSchema.index(
-  { 'estabelecimentos.situacaoCadastral': 1, updatedAt: -1 },
+  { 'estabelecimentos.situacaoCadastral': 1, _id: -1 },
   { name: 'estab_sit_cadastral_ord' }
 );
 
 // Capital social (filtro de intervalo/comparação)
 empresaSchema.index(
-  { capitalSocial: 1, updatedAt: -1 },
+  { capitalSocial: 1, _id: -1 },
   { name: 'capital_ord' }
 );
 

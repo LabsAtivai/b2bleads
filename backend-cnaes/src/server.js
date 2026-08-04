@@ -19,6 +19,7 @@ const READ_PREFERENCE = process.env.MONGO_READ_PREFERENCE || "primaryPreferred";
 const DEFAULT_PAGE_SIZE = 10;
 const MAX_TIME_MS_PRIMARY = Number(process.env.MAX_TIME_MS || 5000);
 const MAX_TIME_MS_RETRY = Number(process.env.MAX_TIME_MS_RETRY || 15000);
+const MAX_TIME_MS_EXPORT = Number(process.env.MAX_TIME_MS_EXPORT || 30000);
 const MAX_EXPORT_ROWS = Number(process.env.MAX_EXPORT_ROWS || 50000);
 
 const INATIVA_CODES = (process.env.INATIVA_CODES || "1,3,4,8,9")
@@ -28,7 +29,14 @@ const INATIVA_CODES = (process.env.INATIVA_CODES || "1,3,4,8,9")
 
 const allowedOrigins = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(",").map((s) => s.trim())
-  : ["http://localhost:5173", "http://localhost:3000"];
+  : ["http://localhost:5173", "http://localhost:3000", "http://localhost:4173", "http://localhost:8090"];
+
+if (!process.env.ALLOWED_ORIGINS) {
+  console.warn(
+    "⚠️  ALLOWED_ORIGINS não definida — liberando apenas origens de desenvolvimento local:",
+    allowedOrigins.join(", ")
+  );
+}
 
 // ======= HELPERS =======
 const reEscape = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -512,6 +520,7 @@ function buildFilter(p) {
         .limit(MAX_EXPORT_ROWS)
         .read(READ_PREFERENCE)
         .lean()
+        .maxTimeMS(MAX_TIME_MS_EXPORT)
         .cursor({ batchSize: 500 });
 
       let count = 0;
@@ -567,21 +576,30 @@ function buildFilter(p) {
 
       try {
         const filename = `empresas_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.xlsx`;
-        const workbook = new ExcelJS.Workbook();
-        const sheet = workbook.addWorksheet("Empresas");
 
-        sheet.addRow(["CNPJ", "RazaoSocial", "NomeFantasia", "Email", "CidadeUF", "CNAE", "Telefone", "Porte", "NaturezaJuridica"]);
+        res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+        res.setHeader("Cache-Control", "no-cache");
+
+        // Streaming: escreve linha a linha direto na resposta HTTP em vez de
+        // montar a planilha inteira em memória antes de enviar qualquer byte.
+        const workbook = new ExcelJS.stream.xlsx.WorkbookWriter({
+          stream: res,
+          useStyles: false,
+          useSharedStrings: false,
+        });
+        const sheet = workbook.addWorksheet("Empresas");
+        sheet.addRow(["CNPJ", "RazaoSocial", "NomeFantasia", "Email", "CidadeUF", "CNAE", "Telefone", "Porte", "NaturezaJuridica"]).commit();
 
         const cursor = Empresa.find(filter)
           .sort({ _id: -1 })
           .limit(MAX_EXPORT_ROWS)
           .read(READ_PREFERENCE)
           .lean()
+          .maxTimeMS(MAX_TIME_MS_EXPORT)
           .cursor({ batchSize: 500 });
 
-        let count = 0;
         for await (const doc of cursor) {
-          count++;
           const est = doc.estabelecimentos?.[0] || {};
           const endereco = est.endereco || {};
           const contatos = est.contatos || {};
@@ -589,26 +607,23 @@ function buildFilter(p) {
           const cidadeUf = [endereco.municipio?.descricao, endereco.uf].filter(Boolean).join(" - ");
           const telefone = (Array.isArray(est.telefones) && est.telefones[0]) || contatos.telefone1 || contatos.telefone2 || "";
 
-          sheet.addRow([
-            est.cnpj || "",
-            doc.razaoSocial || "",
-            est.nomeFantasia || "",
-            email,
-            cidadeUf,
-            est.cnaeFiscalPrincipal?.codigo || est.cnaeFiscalPrincipalCodigo || "",
-            telefone,
-            est.porte?.descricao || doc.porte?.descricao || "Desconhecido",
-            doc.natureza?.descricao || "",
-          ]);
+          sheet
+            .addRow([
+              est.cnpj || "",
+              doc.razaoSocial || "",
+              est.nomeFantasia || "",
+              email,
+              cidadeUf,
+              est.cnaeFiscalPrincipal?.codigo || est.cnaeFiscalPrincipalCodigo || "",
+              telefone,
+              est.porte?.descricao || doc.porte?.descricao || "Desconhecido",
+              doc.natureza?.descricao || "",
+            ])
+            .commit();
         }
 
-        res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-        res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-        res.setHeader("Cache-Control", "no-cache");
-        if (count >= MAX_EXPORT_ROWS) res.setHeader("X-Truncated", "true");
-
-        await workbook.xlsx.write(res);
-        res.end();
+        await sheet.commit();
+        await workbook.commit();
       } catch (e) {
         console.error("[empresas.xlsx] erro:", e);
         if (!res.headersSent)
