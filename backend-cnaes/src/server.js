@@ -628,7 +628,12 @@ function buildFilter(p) {
         console.error("[empresas.xlsx] erro:", e);
         if (!res.headersSent)
           return res.status(500).json({ error: "Erro ao exportar XLSX", detail: e.message });
-        else res.end();
+        // Streaming já começou: não dá para mandar um JSON de erro agora.
+        // Encerrar com res.end() deixaria o cliente com um .xlsx incompleto
+        // mas "concluído" do ponto de vista HTTP (arquivo corrompido que
+        // parece ter baixado certo). Derrubar a conexão força o cliente a
+        // reconhecer a falha em vez de salvar um arquivo inválido.
+        else res.destroy(e);
       }
     }
   );
