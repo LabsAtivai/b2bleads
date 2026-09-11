@@ -174,47 +174,68 @@ onMounted(fetchNow);
     <!-- Filters Card -->
     <div class="card">
       <div class="p-4 pb-3">
-        <!-- Main filters grid -->
-        <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-x-3 gap-y-2">
-          <div class="filter-group">
-            <span class="label">Razão Social</span>
-            <input v-model="form.nome" placeholder="Nome da empresa" class="input" @keyup.enter="fetchNow" />
+        <!-- Quick filters: grouped by what they identify -->
+        <div class="flex flex-wrap gap-x-5 gap-y-3">
+          <!-- Empresa -->
+          <div class="flex-[2.4] min-w-[260px]">
+            <span class="cluster-label">Empresa</span>
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <div class="filter-group">
+                <span class="label">Razão Social</span>
+                <input v-model="form.nome" placeholder="Nome da empresa" class="input" @keyup.enter="fetchNow" />
+              </div>
+              <div class="filter-group">
+                <span class="label">Nome Fantasia</span>
+                <input v-model="form.nomeFantasia" placeholder="Nome fantasia" class="input" @keyup.enter="fetchNow" />
+              </div>
+              <div class="filter-group">
+                <span class="label">CNPJ</span>
+                <input v-model="form.cnpj" placeholder="00.000.000/0001-00" class="input" @keyup.enter="fetchNow" />
+              </div>
+            </div>
           </div>
-          <div class="filter-group">
-            <span class="label">Nome Fantasia</span>
-            <input v-model="form.nomeFantasia" placeholder="Nome fantasia" class="input" @keyup.enter="fetchNow" />
-          </div>
-          <div class="filter-group">
-            <span class="label">CNPJ</span>
-            <input v-model="form.cnpj" placeholder="00.000.000/0001-00" class="input" @keyup.enter="fetchNow" />
-          </div>
-          <Typeahead v-model="form.cnaePrincipal" :fetcher="suggestCnae" label="CNAE" show-value />
-          <div class="filter-group">
-            <span class="label">UF</span>
-            <select v-model="form.uf" class="select" @change="form.cidade = ''">
-              <option value="">Todos</option>
-              <option v-for="u in UFS" :key="u" :value="u">{{ u }}</option>
-            </select>
-          </div>
-          <Typeahead v-model="form.cidade" :fetcher="suggestCidadePorUf" label="Cidade" placeholder="Digite a cidade" />
-        </div>
 
-        <!-- Row 2 -->
-        <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-x-3 gap-y-2 mt-2">
-          <div class="filter-group">
-            <span class="label">Situação</span>
-            <select v-model="form.situacao" class="select">
-              <option value="">Todas</option>
-              <option value="ATIVA">Ativa</option>
-              <option value="INATIVA">Inativa</option>
-              <option value="BAIXADA">Baixada</option>
-              <option value="SUSPENSA">Suspensa</option>
-              <option value="INAPTA">Inapta</option>
-              <option value="NULA">Nula</option>
-              <option value="CANCELADA">Cancelada</option>
-            </select>
+          <div class="hidden lg:block w-px bg-gray-100 self-stretch"></div>
+
+          <!-- Atividade -->
+          <div class="flex-1 min-w-[170px]">
+            <span class="cluster-label">Atividade</span>
+            <Typeahead v-model="form.cnaePrincipal" :fetcher="suggestCnae" label="CNAE" show-value hide-label />
           </div>
-          <Typeahead v-model="form.porte" :fetcher="suggestPorte" label="Porte" />
+
+          <div class="hidden lg:block w-px bg-gray-100 self-stretch"></div>
+
+          <!-- Localização -->
+          <div class="flex-[1.5] min-w-[210px]">
+            <span class="cluster-label">Localização</span>
+            <div class="grid grid-cols-2 gap-2">
+              <select v-model="form.uf" class="select" @change="form.cidade = ''">
+                <option value="">UF: todos</option>
+                <option v-for="u in UFS" :key="u" :value="u">{{ u }}</option>
+              </select>
+              <Typeahead v-model="form.cidade" :fetcher="suggestCidadePorUf" label="Cidade" placeholder="Cidade" hide-label />
+            </div>
+          </div>
+
+          <div class="hidden lg:block w-px bg-gray-100 self-stretch"></div>
+
+          <!-- Qualificação do lead -->
+          <div class="flex-[1.5] min-w-[210px]">
+            <span class="cluster-label">Qualificação</span>
+            <div class="grid grid-cols-2 gap-2">
+              <select v-model="form.situacao" class="select">
+                <option value="">Situação: todas</option>
+                <option value="ATIVA">Ativa</option>
+                <option value="INATIVA">Inativa</option>
+                <option value="BAIXADA">Baixada</option>
+                <option value="SUSPENSA">Suspensa</option>
+                <option value="INAPTA">Inapta</option>
+                <option value="NULA">Nula</option>
+                <option value="CANCELADA">Cancelada</option>
+              </select>
+              <Typeahead v-model="form.porte" :fetcher="suggestPorte" label="Porte" hide-label />
+            </div>
+          </div>
         </div>
       </div>
 
@@ -231,7 +252,7 @@ onMounted(fetchNow);
             Filtros avançados
             <span v-if="advancedCount" class="ml-1 bg-blue-100 text-blue-700 rounded-full px-1.5 py-0 text-[10px] font-semibold">{{ advancedCount }}</span>
           </span>
-          <span class="text-[10px] text-gray-400">qualidade de lead, capital, datas</span>
+          <span class="text-[10px] text-gray-400">jurídico, contato, financeiro, abertura</span>
         </button>
 
         <Transition
@@ -243,56 +264,66 @@ onMounted(fetchNow);
           leave-to-class="max-h-0 opacity-0"
         >
           <div v-show="showAdvanced" class="overflow-hidden">
-            <div class="px-4 pb-4 pt-2 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-x-3 gap-y-2">
-              <Typeahead v-model="form.naturezaJuridica" :fetcher="suggestNatureza" label="Natureza Jurídica" />
-              <div class="filter-group">
-                <span class="label">Email</span>
-                <input v-model="form.email" placeholder="Buscar por email" class="input" @keyup.enter="fetchNow" />
-              </div>
-              <div class="filter-group">
-                <span class="label">Telefone</span>
-                <input v-model="form.telefone" placeholder="DDD + número" class="input" @keyup.enter="fetchNow" />
-              </div>
-              <div class="filter-group">
-                <span class="label">CEP</span>
-                <input v-model="form.cep" placeholder="00000-000" class="input" @keyup.enter="fetchNow" />
-              </div>
-              <div class="filter-group">
-                <span class="label">Capital Social</span>
-                <input v-model="form.capitalSocial" placeholder=">100000" class="input" @keyup.enter="fetchNow" />
-              </div>
-              <div class="filter-group">
-                <span class="label">Regime</span>
-                <select v-model="form.simplesNacional" class="select">
-                  <option value="">Todos</option>
-                  <option value="SIMPLES">Simples Nacional</option>
-                  <option value="MEI">MEI</option>
-                  <option value="NAO">Não optante</option>
-                </select>
-              </div>
-              <div class="filter-group">
-                <span class="label">Abertura de</span>
-                <input v-model="form.dataAberturaMin" type="date" class="input" />
-              </div>
-              <div class="filter-group">
-                <span class="label">Abertura até</span>
-                <input v-model="form.dataAberturaMax" type="date" class="input" />
+            <div class="px-4 pb-4 pt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-x-5 gap-y-4">
+              <!-- Jurídico -->
+              <div>
+                <span class="cluster-label">Jurídico</span>
+                <div class="space-y-2">
+                  <Typeahead v-model="form.naturezaJuridica" :fetcher="suggestNatureza" label="Natureza Jurídica" hide-label />
+                  <select v-model="form.simplesNacional" class="select">
+                    <option value="">Regime: todos</option>
+                    <option value="SIMPLES">Simples Nacional</option>
+                    <option value="MEI">MEI</option>
+                    <option value="NAO">Não optante</option>
+                  </select>
+                </div>
               </div>
 
-              <!-- Toggles -->
-              <div class="col-span-2 sm:col-span-3 lg:col-span-4 flex flex-wrap items-center gap-x-5 gap-y-2 pt-1">
-                <label class="flex items-center gap-2 text-sm text-gray-600 cursor-pointer select-none">
-                  <input type="checkbox" v-model="form.temEmail" class="rounded border-gray-300 text-blue-600 focus:ring-blue-500 h-4 w-4" />
-                  <span>Somente com email</span>
-                </label>
-                <label class="flex items-center gap-2 text-sm text-gray-600 cursor-pointer select-none">
-                  <input type="checkbox" v-model="form.temTelefone" class="rounded border-gray-300 text-blue-600 focus:ring-blue-500 h-4 w-4" />
-                  <span>Somente com telefone</span>
-                </label>
-                <label class="flex items-center gap-2 text-sm text-gray-600 cursor-pointer select-none">
-                  <input type="checkbox" v-model="form.buscarCnaeSecundario" class="rounded border-gray-300 text-blue-600 focus:ring-blue-500 h-4 w-4" />
-                  <span>Incluir CNAEs secundários</span>
-                </label>
+              <!-- Contato -->
+              <div>
+                <span class="cluster-label">Contato</span>
+                <div class="space-y-2">
+                  <input v-model="form.email" placeholder="Email" class="input" @keyup.enter="fetchNow" />
+                  <input v-model="form.telefone" placeholder="Telefone (DDD + número)" class="input" @keyup.enter="fetchNow" />
+                  <input v-model="form.cep" placeholder="CEP" class="input" @keyup.enter="fetchNow" />
+                </div>
+              </div>
+
+              <!-- Financeiro & abertura -->
+              <div>
+                <span class="cluster-label">Financeiro &amp; abertura</span>
+                <div class="space-y-2">
+                  <input v-model="form.capitalSocial" placeholder="Capital social, ex: >100000" class="input" @keyup.enter="fetchNow" />
+                  <div class="grid grid-cols-2 gap-2">
+                    <div class="filter-group">
+                      <span class="label">De</span>
+                      <input v-model="form.dataAberturaMin" type="date" class="input" />
+                    </div>
+                    <div class="filter-group">
+                      <span class="label">Até</span>
+                      <input v-model="form.dataAberturaMax" type="date" class="input" />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Qualidade do lead -->
+              <div>
+                <span class="cluster-label">Qualidade do lead</span>
+                <div class="flex flex-col gap-2 pt-1">
+                  <label class="flex items-center gap-2 text-sm text-gray-600 cursor-pointer select-none">
+                    <input type="checkbox" v-model="form.temEmail" class="rounded border-gray-300 text-blue-600 focus:ring-blue-500 h-4 w-4" />
+                    <span>Somente com email</span>
+                  </label>
+                  <label class="flex items-center gap-2 text-sm text-gray-600 cursor-pointer select-none">
+                    <input type="checkbox" v-model="form.temTelefone" class="rounded border-gray-300 text-blue-600 focus:ring-blue-500 h-4 w-4" />
+                    <span>Somente com telefone</span>
+                  </label>
+                  <label class="flex items-center gap-2 text-sm text-gray-600 cursor-pointer select-none">
+                    <input type="checkbox" v-model="form.buscarCnaeSecundario" class="rounded border-gray-300 text-blue-600 focus:ring-blue-500 h-4 w-4" />
+                    <span>Incluir CNAEs secundários</span>
+                  </label>
+                </div>
               </div>
             </div>
           </div>

@@ -1,10 +1,11 @@
 <template>
   <div class="filter-group">
-    <span v-if="label" class="label">{{ label }}</span>
+    <span v-if="label && !hideLabel" class="label">{{ label }}</span>
     <div class="relative" @keydown.down.prevent="move(1)" @keydown.up.prevent="move(-1)" @keydown.enter.prevent="chooseActive()">
       <div class="relative">
         <input
-          :placeholder="placeholder || 'Buscar...'"
+          :placeholder="placeholder || label || 'Buscar...'"
+          :aria-label="hideLabel ? label : undefined"
           class="input pr-8"
           v-model="inner"
           @focus="open = true; fetchDebounced()"
@@ -61,6 +62,7 @@ const props = defineProps({
   label: String,
   placeholder: String,
   showValue: { type: Boolean, default: false },
+  hideLabel: { type: Boolean, default: false },
   fetcher: { type: Function, required: true },
 })
 

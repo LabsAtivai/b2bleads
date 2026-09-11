@@ -50,6 +50,9 @@
   .label {
     @apply block text-xs font-medium text-gray-500 mb-1 uppercase tracking-wide;
   }
+  .cluster-label {
+    @apply block text-[11px] font-medium text-gray-400 mb-1.5;
+  }
   .filter-group {
     @apply flex flex-col gap-1;
   }
