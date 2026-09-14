@@ -232,22 +232,28 @@ function buildFilter(p) {
   if (p.cnaePrincipal) {
     const rawCnae = p.cnaePrincipal.trim();
     const digits = rawCnae.replace(/\D/g, "");
-    const rx = like(rawCnae);
+    const isCodigoCompleto = digits.length === 7;
     const cnaeOr = [];
-    if (digits.length >= 4) {
-      cnaeOr.push({ "estabelecimentos.cnaeFiscalPrincipalCodigo": digits });
-    }
-    cnaeOr.push(
-      { "estabelecimentos.cnaeFiscalPrincipal.codigo": rx },
-      { "estabelecimentos.cnaeFiscalPrincipal.descricao": rx }
-    );
 
-    if (p.buscarCnaeSecundario === "1") {
-      const rxSec = like(rawCnae);
-      if (digits.length >= 4) {
+    if (isCodigoCompleto) {
+      // Código completo: match exato indexado, sem regex — evita COLLSCAN
+      // (regex em cnaeFiscalPrincipal.descricao não tem índice e forçava
+      // varredura da coleção inteira mesmo com código exato informado).
+      cnaeOr.push({ "estabelecimentos.cnaeFiscalPrincipalCodigo": digits });
+      if (p.buscarCnaeSecundario === "1") {
         cnaeOr.push({ "estabelecimentos.cnaesSecundariosCodigos": digits });
-      } else {
-        cnaeOr.push({ "estabelecimentos.cnaesSecundariosCodigos": rxSec });
+      }
+    } else {
+      const rx = like(rawCnae);
+      if (digits.length >= 4) {
+        cnaeOr.push({ "estabelecimentos.cnaeFiscalPrincipalCodigo": digits });
+      }
+      cnaeOr.push(
+        { "estabelecimentos.cnaeFiscalPrincipal.codigo": rx },
+        { "estabelecimentos.cnaeFiscalPrincipal.descricao": rx }
+      );
+      if (p.buscarCnaeSecundario === "1") {
+        cnaeOr.push({ "estabelecimentos.cnaesSecundariosCodigos": rx });
       }
     }
 
@@ -463,15 +469,32 @@ function buildFilter(p) {
         }
       }
 
-      const countPromise = hasFilter
-        ? Empresa.countDocuments(filter)
+      async function runCount() {
+        if (!hasFilter) {
+          return Empresa.estimatedDocumentCount().exec().catch(() => null);
+        }
+        try {
+          return await Empresa.countDocuments(filter)
             .read(READ_PREFERENCE)
-            .maxTimeMS(MAX_TIME_MS_RETRY)
-            .exec()
-            .catch(() => undefined)
-        : Empresa.estimatedDocumentCount().exec().catch(() => undefined);
+            .maxTimeMS(MAX_TIME_MS_PRIMARY)
+            .exec();
+        } catch (e) {
+          if (e.code === 50) {
+            console.warn("[/api/empresas] countDocuments MaxTimeMSExpired, retry...");
+            try {
+              return await Empresa.countDocuments(filter)
+                .read("secondaryPreferred")
+                .maxTimeMS(MAX_TIME_MS_RETRY)
+                .exec();
+            } catch {
+              return null;
+            }
+          }
+          return null;
+        }
+      }
 
-      const [docs, total] = await Promise.all([runFind(), countPromise]);
+      const [docs, total] = await Promise.all([runFind(), runCount()]);
 
       const hasNextPage = docs.length > limit;
       const items = hasNextPage ? docs.slice(0, limit) : docs;
@@ -479,7 +502,9 @@ function buildFilter(p) {
 
       res.json({
         items,
-        total: total ?? items.length,
+        // null = contagem indisponível (timeout); nunca mandar items.length aqui
+        // pra não fingir que o total é só o tamanho da página atual.
+        total: total ?? null,
         pageInfo: { hasNextPage, nextCursor },
       });
     } catch (e) {

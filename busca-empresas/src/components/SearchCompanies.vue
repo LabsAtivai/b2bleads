@@ -96,7 +96,7 @@ const fetchData = async (cursor = null) => {
         telefone: (Array.isArray(est.telefones) && est.telefones[0]) || cont.telefone1 || "",
       };
     });
-    total.value = typeof tt === "number" ? tt : rows.value.length;
+    total.value = typeof tt === "number" ? tt : null;
     nextCursor.value = pageInfo?.nextCursor || null;
   } catch (e) {
     console.error("Erro ao buscar empresas:", e);
@@ -380,6 +380,9 @@ onMounted(fetchNow);
           <span class="font-semibold text-gray-700">{{ total.toLocaleString("pt-BR") }}</span>
           <span class="text-gray-400">empresa{{ total !== 1 ? "s" : "" }}</span>
         </div>
+        <span v-else-if="!loading && total === null && rows.length" class="text-xs text-gray-400" title="Filtro muito amplo, contagem exata indisponível">
+          contagem indisponível
+        </span>
         <span v-else-if="loading" class="text-xs text-gray-400 animate-pulse">Buscando...</span>
       </div>
     </div>

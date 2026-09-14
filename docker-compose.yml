@@ -22,6 +22,7 @@ services:
       - DB_NAME=${DB_NAME:-receitafederal}
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:5173,https://b2b.labsativa.com.br,https://api-b2b.labsativa.com.br}
       - MAX_EXPORT_ROWS=${MAX_EXPORT_ROWS:-50000}
+      - MAX_TIME_MS_EXPORT=${MAX_TIME_MS_EXPORT:-120000}
     restart: unless-stopped
     networks:
       - ativaai
