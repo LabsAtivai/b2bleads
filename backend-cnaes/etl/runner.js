@@ -39,5 +39,17 @@ async function tick(force = false) {
 
 console.log(`ETL runner ativo. Janela: dias ${DAY_START}-${DAY_END}, a partir de ${HOUR}h (TZ=${process.env.TZ || 'padrão'})`);
 if (process.env.RUN_ON_START === '1') tick(true);
+
+// Disparo único em horário exato (ex.: ETL_RUN_AT=2026-11-20T00:00:00, no fuso TZ do container).
+// Ignora a janela de dias/hora. Se o horário já passou, não dispara.
+if (process.env.ETL_RUN_AT) {
+  const delay = new Date(process.env.ETL_RUN_AT).getTime() - Date.now();
+  if (Number.isFinite(delay) && delay > 0) {
+    console.log(`Execução agendada para ${process.env.ETL_RUN_AT} (em ${Math.round(delay / 60000)} min)`);
+    setTimeout(() => tick(true), delay);
+  } else {
+    console.log('ETL_RUN_AT inválido ou no passado; ignorado.');
+  }
+}
 setInterval(() => tick(), CHECK_EVERY_MS);
 tick();

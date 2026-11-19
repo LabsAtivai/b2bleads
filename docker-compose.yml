@@ -49,7 +49,8 @@ services:
       - LOCAL_ZIPS_DIR=/data/zips_cnpj
       - ETL_DAY_START=${ETL_DAY_START:-5}
       - ETL_DAY_END=${ETL_DAY_END:-20}
-      - ETL_HOUR=${ETL_HOUR:-3}
+      - ETL_HOUR=${ETL_HOUR:-0}
+      - ETL_RUN_AT=${ETL_RUN_AT:-}
       - RF_SHARE_TOKEN=${RF_SHARE_TOKEN:-gn672Ad4CF8N6TK}
     volumes:
       - etl_data:/data
