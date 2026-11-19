@@ -6,6 +6,7 @@ COPY package.json ./
 RUN npm install --omit=dev
 
 COPY src/ ./src/
+COPY etl/ ./etl/
 
 EXPOSE 3010
 

@@ -70,7 +70,9 @@ const estabelecimentoSchema = new mongoose.Schema(
 
 const empresaSchema = new mongoose.Schema(
   {
-    cnpjBasico: { type: String, index: true, unique: true },
+    // Índice único declarado abaixo (ux_cnpj_basico); não duplicar aqui.
+    cnpjBasico: { type: String },
+    etlPeriodo: String,
     capitalSocial: Number,
     createdAt: { type: Date, default: Date.now },
     updatedAt: Date,

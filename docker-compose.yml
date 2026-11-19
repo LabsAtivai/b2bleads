@@ -15,6 +15,7 @@ services:
       - "3010:3010"
     environment:
       - PORT=3010
+      - NODE_ENV=production
       - DB_HOST=${DB_HOST:-207.244.249.157}
       - DB_PORT=${DB_PORT:-27017}
       - DB_USER=${DB_USER:-admin}
@@ -23,6 +24,35 @@ services:
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:5173,https://b2b.labsativa.com.br,https://api-b2b.labsativa.com.br}
       - MAX_EXPORT_ROWS=${MAX_EXPORT_ROWS:-50000}
       - MAX_TIME_MS_EXPORT=${MAX_TIME_MS_EXPORT:-120000}
+    restart: unless-stopped
+    networks:
+      - ativaai
+
+  # Atualização mensal automática da base (Receita Federal → MongoDB).
+  # Tenta diariamente (dias 5-20, a partir das 03h); só processa se houver período novo.
+  # Execução manual: docker compose run --rm -e RUN_ON_START=1 etl  |  ou: docker compose exec etl node etl/pipeline.js --force
+  etl:
+    container_name: backend-etl
+    build:
+      context: ./backend-cnaes
+      dockerfile: Dockerfile
+    command: ["node", "etl/runner.js"]
+    environment:
+      - NODE_ENV=production
+      - TZ=${TZ:-America/Sao_Paulo}
+      - DB_HOST=${DB_HOST:-207.244.249.157}
+      - DB_PORT=${DB_PORT:-27017}
+      - DB_USER=${DB_USER:-admin}
+      - DB_PASS=${DB_PASS}
+      - DB_NAME=${DB_NAME:-receitafederal}
+      - DATA_ROOT=/data/dados_cnpj
+      - LOCAL_ZIPS_DIR=/data/zips_cnpj
+      - ETL_DAY_START=${ETL_DAY_START:-5}
+      - ETL_DAY_END=${ETL_DAY_END:-20}
+      - ETL_HOUR=${ETL_HOUR:-3}
+      - RF_SHARE_TOKEN=${RF_SHARE_TOKEN:-gn672Ad4CF8N6TK}
+    volumes:
+      - etl_data:/data
     restart: unless-stopped
     networks:
       - ativaai
@@ -41,3 +71,6 @@ services:
     restart: unless-stopped
     networks:
       - ativaai
+
+volumes:
+  etl_data:
