@@ -1,6 +1,7 @@
 /* eslint-disable no-console */
 import dotenv from 'dotenv';
 import { runEtl } from './pipeline.js';
+import { notify } from './notify.js';
 
 dotenv.config();
 
@@ -37,6 +38,7 @@ async function tick(force = false) {
     // Falha: libera nova tentativa no dia seguinte (lastAttemptDay já marcado).
   } catch (err) {
     console.error(`[${new Date().toISOString()}] ETL erro:`, err.message);
+    if (!err.notified) await notify('FALHOU', { error: String(err.message || err).slice(0, 500) });
   } finally {
     running = false;
   }

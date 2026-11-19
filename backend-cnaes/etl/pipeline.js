@@ -3,6 +3,7 @@ import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { getDbName } from '../src/mongoConfig.js';
+import { notify } from './notify.js';
 import { detectLatestPeriodo, downloadPeriodo } from './download-dados-rf.js';
 import {
   newMongoClient, runImport, aggregateEmpresas, purgeStale, cleanupFiles, ensureIndexes,
@@ -115,6 +116,7 @@ export async function runEtl({ periodo: periodoOverride, force = false } = {}) {
     const setRun = (fields) => runs.updateOne({ _id: periodo }, { $set: fields });
 
     console.log(`=== ETL período ${periodo}${resume ? ' (retomando agregação)' : ''} ===`);
+    await notify('iniciado', { periodo, resume: !!resume });
 
     try {
       let importStats = existing?.counts || {};
@@ -160,9 +162,12 @@ export async function runEtl({ periodo: periodoOverride, force = false } = {}) {
         truncados: agg.truncados, purge, purgeSkipped, counts: importStats,
       });
       console.log(`=== ETL período ${periodo} concluído: ${totalProcessed.toLocaleString()} empresas ===`);
+      await notify(purgeSkipped ? 'concluido-sem-purga' : 'concluido', { periodo, processed: totalProcessed, purgeSkipped });
       return { status: 'done', periodo, processed: totalProcessed, purgeSkipped };
     } catch (err) {
       console.error('ETL falhou:', err);
+      await notify('FALHOU', { periodo, error: String(err.message || err).slice(0, 500) });
+      err.notified = true;
       await setRun({ status: 'failed', finishedAt: new Date(), error: String(err.stack || err.message || err).slice(0, 4000) });
       throw err;
     }

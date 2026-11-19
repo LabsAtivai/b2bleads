@@ -51,6 +51,7 @@ services:
       - ETL_DAY_END=${ETL_DAY_END:-20}
       - ETL_HOUR=${ETL_HOUR:-0}
       - ETL_RUN_AT=${ETL_RUN_AT:-}
+      - ETL_WEBHOOK_URL=${ETL_WEBHOOK_URL:-}
       - RF_SHARE_TOKEN=${RF_SHARE_TOKEN:-gn672Ad4CF8N6TK}
     volumes:
       - etl_data:/data
