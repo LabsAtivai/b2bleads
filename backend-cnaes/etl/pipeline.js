@@ -15,6 +15,24 @@ const LOCK_RENEW_MS = 2 * 60 * 1000;
 const MIN_EMPRESAS = Number(process.env.ETL_MIN_EMPRESAS || 40_000_000);
 const MIN_RATIO_PREV = Number(process.env.ETL_MIN_RATIO_PREV || 0.95);
 
+// Proteção do disco do servidor (compartilhado com dezenas de serviços).
+const MIN_FREE_GB_START = Number(process.env.ETL_MIN_FREE_GB_START || 60);
+const MIN_FREE_GB_ABORT = Number(process.env.ETL_MIN_FREE_GB_ABORT || 20);
+
+async function freeDiskGb(db) {
+  const st = await db.command({ dbStats: 1, scale: 1 });
+  if (!st.fsTotalSize) return Infinity;
+  return (st.fsTotalSize - st.fsUsedSize) / 1e9;
+}
+
+async function assertDisk(db, minGb, stage) {
+  const free = await freeDiskGb(db);
+  if (free < minGb) {
+    throw new Error(`Disco insuficiente (${stage}): ${free.toFixed(1)} GB livres < mínimo ${minGb} GB`);
+  }
+  return free;
+}
+
 const OWNER = `${os.hostname()}:${process.pid}`;
 
 async function acquireLock(db) {
@@ -102,6 +120,7 @@ export async function runEtl({ periodo: periodoOverride, force = false } = {}) {
       let importStats = existing?.counts || {};
 
       if (!resume) {
+        console.log(`Disco livre: ${(await assertDisk(db, MIN_FREE_GB_START, 'início')).toFixed(1)} GB`);
         await ensureIndexes(client);
         await downloadPeriodo(periodo);
         await setRun({ stage: 'import' });
@@ -113,7 +132,10 @@ export async function runEtl({ periodo: periodoOverride, force = false } = {}) {
       const agg = await aggregateEmpresas(client, {
         periodo,
         resumeFrom,
-        onCheckpoint: (last, processed) => setRun({ aggCheckpoint: last, aggProcessed: (resume ? existing.aggProcessed || 0 : 0) + processed }),
+        onCheckpoint: async (last, processed) => {
+          await setRun({ aggCheckpoint: last, aggProcessed: (resume ? existing.aggProcessed || 0 : 0) + processed });
+          if (processed % 20000 < 500) await assertDisk(db, MIN_FREE_GB_ABORT, 'agregação');
+        },
       });
       const totalProcessed = (resume ? existing.aggProcessed || 0 : 0) + agg.processed;
 
