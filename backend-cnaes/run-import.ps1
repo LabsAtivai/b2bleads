@@ -1,6 +1,7 @@
-# Script para rodar a importação completa
-# Uso: .\run-import.ps1
-# Os dados já foram baixados e extraidos. Este script importa no MongoDB.
+# Script para rodar a importação manual de um período.
+# Uso: .\run-import.ps1 -Periodo 2026-11
+# ATENÇÃO: o container "etl" já faz isso todo mês, de forma automática. Não rode os dois ao mesmo tempo.
+param([Parameter(Mandatory = $true)][string]$Periodo)
 
 Write-Host "=============================================" -ForegroundColor Cyan
 Write-Host "  Importação B2B Leads - Receita Federal" -ForegroundColor Cyan
@@ -15,7 +16,7 @@ Write-Host "Iniciando importação (pode levar várias horas)..." -ForegroundCol
 Write-Host "Ctrl+C para pausar. Pode reiniciar sem perder progresso." -ForegroundColor DarkGray
 Write-Host ""
 
-node import.js
+node etl/import.js $Periodo
 
 if ($LASTEXITCODE -eq 0) {
     Write-Host ""
