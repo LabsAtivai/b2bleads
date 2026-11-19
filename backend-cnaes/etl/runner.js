@@ -17,8 +17,13 @@ let lastAttemptDay = '';
 
 const dayKey = (d) => `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
 
+// Enquanto houver um disparo agendado no futuro (ETL_RUN_AT), a janela mensal fica em espera.
+const runAtMs = process.env.ETL_RUN_AT ? new Date(process.env.ETL_RUN_AT).getTime() : NaN;
+const waitingRunAt = () => Number.isFinite(runAtMs) && runAtMs > Date.now();
+
 async function tick(force = false) {
   if (running) return;
+  if (!force && waitingRunAt()) return;
   const now = new Date();
   const inWindow = now.getDate() >= DAY_START && now.getDate() <= DAY_END && now.getHours() >= HOUR;
   if (!force && (!inWindow || lastAttemptDay === dayKey(now))) return;
